@@ -50,7 +50,10 @@ class _BluetoothScanningPageState extends State<BluetoothScanningPage> {
 
   Future<void> _connect() async {
     try {
-      await _ble.start(widget.vehicle.id);
+      await _ble.start(
+        widget.vehicle.id,
+        deviceName: widget.vehicle.bluetoothDeviceName,
+      );
     } catch (error) {
       if (!mounted) return;
       ScaffoldMessenger.of(context)

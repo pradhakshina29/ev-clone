@@ -61,6 +61,7 @@ class VehicleSimulatorPeripheral extends ChangeNotifier {
 
   VehicleControlState _state = const VehicleControlState();
   String _vehicleId = '';
+  String _advertisedName = defaultVehicleSimulatorName;
   String? _error;
   String _status = 'Ready to advertise';
   int _sequence = 0;
@@ -75,6 +76,7 @@ class VehicleSimulatorPeripheral extends ChangeNotifier {
 
   VehicleControlState get state => _state;
   String get status => _status;
+  String get advertisedName => _advertisedName;
   String? get error => _error;
   bool get advertising => _advertising;
   List<String> get eventLog => List.unmodifiable(_eventLog);
@@ -147,6 +149,7 @@ class VehicleSimulatorPeripheral extends ChangeNotifier {
         return;
       }
       _vehicleId = normalizedVehicleId;
+      _advertisedName = vehicleSimulatorNameFor(normalizedVehicleId);
       debugPrint(
         '[Vehicle Simulator BLE] Registering GATT service '
         '$vehicleControlServiceUuid before advertising.',
@@ -166,25 +169,25 @@ class VehicleSimulatorPeripheral extends ChangeNotifier {
       );
       debugPrint(
         '[Vehicle Simulator BLE] GATT service registration completed; '
-        'requesting connectable advertisement name=$vehicleSimulatorAdvertisedName '
+        'requesting connectable advertisement name=$_advertisedName '
         'service=$vehicleControlServiceUuid.',
       );
       await _manager.startAdvertising(
         Advertisement(
-          name: vehicleSimulatorAdvertisedName,
+          name: _advertisedName,
           serviceUUIDs: [UUID.fromString(vehicleControlServiceUuid)],
         ),
       );
       debugPrint(
         '[Vehicle Simulator BLE] ${DateTime.now().toIso8601String()} '
         'SIMULATOR_ADVERTISING_SUCCEEDED vehicleDocumentId=$_vehicleId '
-        'peripheral=$vehicleSimulatorAdvertisedName '
+        'peripheral=$_advertisedName '
         'service=$vehicleControlServiceUuid.',
       );
       _advertising = true;
       _error = null;
       _setStatus('Advertising vehicle $_vehicleId');
-      _recordEvent('Advertising as $vehicleSimulatorAdvertisedName');
+      _recordEvent('Advertising as $_advertisedName');
       await _notifyCurrentState();
     } catch (error, stackTrace) {
       _advertising = false;

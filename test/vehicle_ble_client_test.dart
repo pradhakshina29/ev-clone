@@ -286,6 +286,23 @@ void main() {
       },
     );
 
+    test('expects the simulator name of the selected vehicle', () async {
+      final adapter = _FakeWebAdapter()..simulatorVehicleId = 'EV002';
+      final client = VehicleBleClient(webAdapter: adapter);
+      addTearDown(client.dispose);
+
+      await client.start('EV002');
+      expect(client.expectedDeviceName, 'EV-Simulator-02');
+
+      await client.disconnect();
+      await client.start('EV002', deviceName: ' Custom-Sim ');
+      expect(client.expectedDeviceName, 'Custom-Sim');
+
+      await client.disconnect();
+      await client.start('EV002', deviceName: '');
+      expect(client.expectedDeviceName, 'EV-Simulator-02');
+    });
+
     test(
       'repeated connect for the same live vehicle does not duplicate connection',
       () async {

@@ -55,6 +55,8 @@ class VehicleBleClient extends ChangeNotifier {
   Timer? _reconnectTimer;
   Timer? _scanTimeoutTimer;
   String _vehicleId = '';
+  // The advertised name to accept on Android, e.g. EV-Simulator-02 for EV002.
+  String _expectedDeviceName = defaultVehicleSimulatorName;
   String? _error;
   VehicleBlePhase _phase = VehicleBlePhase.stopped;
   int _lastSequence = -1;
@@ -95,6 +97,7 @@ class VehicleBleClient extends ChangeNotifier {
   String? get error => _error;
   DateTime? get lastDataUpdate => _lastDataUpdate;
   String? get vehicleId => _vehicleId.isEmpty ? null : _vehicleId;
+  String get expectedDeviceName => _expectedDeviceName;
   String? get selectedDeviceName => _isWebMode
       ? (_requireDeviceSelection
             ? null
@@ -168,7 +171,10 @@ class VehicleBleClient extends ChangeNotifier {
     }
   }
 
-  Future<void> start(String vehicleId) async {
+  /// Connects to the simulator for [vehicleId]. [deviceName] is the vehicle's
+  /// bluetoothDeviceName from the backend; when empty the name is derived
+  /// from the ID with [vehicleSimulatorNameFor].
+  Future<void> start(String vehicleId, {String? deviceName}) async {
     if (!_isAuthenticated) {
       throw StateError('Sign in before connecting to a vehicle.');
     }
@@ -193,6 +199,10 @@ class VehicleBleClient extends ChangeNotifier {
       await disconnect();
     }
     _vehicleId = requestedVehicleId;
+    final trimmedDeviceName = deviceName?.trim() ?? '';
+    _expectedDeviceName = trimmedDeviceName.isNotEmpty
+        ? trimmedDeviceName
+        : vehicleSimulatorNameFor(requestedVehicleId);
     _lastDataUpdate = null;
     _hasLoggedFirstTelemetry = false;
     snapshot.value = null;
@@ -456,7 +466,7 @@ class VehicleBleClient extends ChangeNotifier {
         message.contains('cancelled') ||
         message.contains('canceled')) {
       if (message.contains('DEVICE_REQUEST')) {
-        return 'Chrome did not select a matching device. Confirm the simulator is advertising EV-Simulator-01 and try again. Details: $message';
+        return 'Chrome did not select a matching device. Confirm the simulator is advertising $_expectedDeviceName and try again. Details: $message';
       }
       return 'The selected device could not be found. Confirm that it is advertising and retry. Details: $message';
     }
@@ -515,7 +525,7 @@ class VehicleBleClient extends ChangeNotifier {
         unawaited(_stopDiscovery());
         _setPhase(
           VehicleBlePhase.reconnecting,
-          'No EV-Simulator-01 found. Retrying with a limited backoff.',
+          'No $_expectedDeviceName found. Retrying with a limited backoff.',
         );
         _scheduleReconnect();
       });
@@ -534,7 +544,7 @@ class VehicleBleClient extends ChangeNotifier {
           vehicleControlServiceUuid.toLowerCase(),
     );
     if (!serviceFound ||
-        event.advertisement.name != vehicleSimulatorAdvertisedName) {
+        event.advertisement.name != _expectedDeviceName) {
       return;
     }
     _selectedDeviceName = event.advertisement.name;

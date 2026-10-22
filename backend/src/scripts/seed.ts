@@ -49,6 +49,58 @@ const seedVehicles: SeedVehicle[] = [
     },
     configuration: { maximumRangeKm: 350, connectorType: 'CCS2' },
   },
+  {
+    _id: 'EV003',
+    identity: {
+      registrationNumber: 'TN03EF9012',
+      model: 'EV Smart X3',
+      ownerName: 'Registered Vehicle Owner 3',
+      vin: 'EVVIN003',
+      bluetoothDeviceId: 'EV-SIM-003',
+      bluetoothDeviceName: 'EV-Simulator-03',
+      isActive: true,
+    },
+    configuration: { maximumRangeKm: 350, connectorType: 'CCS2' },
+  },
+  {
+    _id: 'EV004',
+    identity: {
+      registrationNumber: 'TN04GH3456',
+      model: 'EV Smart X4',
+      ownerName: 'Registered Vehicle Owner 4',
+      vin: 'EVVIN004',
+      bluetoothDeviceId: 'EV-SIM-004',
+      bluetoothDeviceName: 'EV-Simulator-04',
+      isActive: true,
+    },
+    configuration: { maximumRangeKm: 350, connectorType: 'CCS2' },
+  },
+  {
+    _id: 'EV005',
+    identity: {
+      registrationNumber: 'TN05IJ7890',
+      model: 'EV Smart X5',
+      ownerName: 'Registered Vehicle Owner 5',
+      vin: 'EVVIN005',
+      bluetoothDeviceId: 'EV-SIM-005',
+      bluetoothDeviceName: 'EV-Simulator-05',
+      isActive: true,
+    },
+    configuration: { maximumRangeKm: 350, connectorType: 'CCS2' },
+  },
+  {
+    _id: 'EV006',
+    identity: {
+      registrationNumber: 'TN06KL1234',
+      model: 'EV Smart X6',
+      ownerName: 'Registered Vehicle Owner 6',
+      vin: 'EVVIN006',
+      bluetoothDeviceId: 'EV-SIM-006',
+      bluetoothDeviceName: 'EV-Simulator-06',
+      isActive: true,
+    },
+    configuration: { maximumRangeKm: 350, connectorType: 'CCS2' },
+  },
 ];
 
 const env = loadDatabaseEnv();

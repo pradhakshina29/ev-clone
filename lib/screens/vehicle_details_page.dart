@@ -3,6 +3,7 @@ import 'package:flutter/services.dart';
 
 import '../models/user_model.dart';
 import '../models/vehicle.dart';
+import '../services/api/api_client.dart';
 import '../services/auth_service.dart';
 import '../services/distance_unit_service.dart';
 import '../services/data_service.dart';
@@ -125,7 +126,11 @@ class _VehicleDetailsPageState extends State<VehicleDetailsPage> {
         (route) => false,
       );
     } catch (error) {
-      debugPrint('Vehicle registration failed: ${error.runtimeType}');
+      debugPrint(
+        error is ApiException
+            ? 'Vehicle registration failed: HTTP ${error.statusCode} ${error.code}'
+            : 'Vehicle registration failed: ${error.runtimeType}',
+      );
       if (mounted) {
         await showErrorDialog(
           context,

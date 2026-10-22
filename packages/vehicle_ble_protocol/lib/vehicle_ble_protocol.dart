@@ -4,7 +4,22 @@ import 'dart:typed_data';
 const vehicleControlServiceUuid = '8a7e1000-6d8a-4a31-b8d1-1f40cc5a0001';
 const vehicleStateCharacteristicUuid = '8a7e1001-6d8a-4a31-b8d1-1f40cc5a0001';
 const vehicleCommandCharacteristicUuid = '8a7e1002-6d8a-4a31-b8d1-1f40cc5a0001';
-const vehicleSimulatorAdvertisedName = 'EV-Simulator-01';
+const defaultVehicleSimulatorName = 'EV-Simulator-01';
+
+/// Demo vehicle document IDs created by backend/src/scripts/seed.ts.
+const demoVehicleIds = ['EV001', 'EV002', 'EV003', 'EV004', 'EV005', 'EV006'];
+
+/// BLE name the simulator advertises for a vehicle, matching the seed's
+/// bluetoothDeviceName: EV001 -> EV-Simulator-01, EV002 -> EV-Simulator-02.
+/// IDs outside the EV### pattern use [defaultVehicleSimulatorName].
+String vehicleSimulatorNameFor(String vehicleId) {
+  final match = RegExp(
+    r'^EV0*(\d{1,2})$',
+    caseSensitive: false,
+  ).firstMatch(vehicleId.trim());
+  if (match == null) return defaultVehicleSimulatorName;
+  return 'EV-Simulator-${match.group(1)!.padLeft(2, '0')}';
+}
 const bleFrameHeaderLength = 4;
 const bleDefaultFrameLength = 20;
 const bleMaximumMessageLength = 4080;

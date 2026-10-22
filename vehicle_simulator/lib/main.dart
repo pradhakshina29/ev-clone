@@ -236,14 +236,17 @@ class _VehicleSimulatorPageState extends State<VehicleSimulatorPage> {
     return Scaffold(
       appBar: AppBar(title: const Text('EV VEHICLE SIMULATOR')),
       body: AnimatedBuilder(
-        animation: _peripheral,
+        animation: Listenable.merge([_peripheral, _vehicleIdController]),
         builder: (context, _) {
           final state = _peripheral.state;
+          final advertisedName = _peripheral.advertising
+              ? _peripheral.advertisedName
+              : vehicleSimulatorNameFor(_vehicleIdController.text);
           return ListView(
             padding: const EdgeInsets.all(16),
             children: [
               Text(
-                vehicleSimulatorAdvertisedName,
+                advertisedName,
                 style: Theme.of(context).textTheme.titleLarge?.copyWith(
                   fontWeight: FontWeight.w800,
                   letterSpacing: 0.5,
@@ -288,7 +291,7 @@ class _VehicleSimulatorPageState extends State<VehicleSimulatorPage> {
                         ],
                       ),
                       const SizedBox(height: 4),
-                      Text(vehicleSimulatorAdvertisedName),
+                      Text(advertisedName),
                       if (_peripheral.status != 'Ready to advertise') ...[
                         const SizedBox(height: 6),
                         Text(
@@ -305,15 +308,23 @@ class _VehicleSimulatorPageState extends State<VehicleSimulatorPage> {
                 ),
               ),
               const SizedBox(height: 12),
-              TextField(
+              DropdownMenu<String>(
                 controller: _vehicleIdController,
                 enabled: !_peripheral.advertising,
-                decoration: const InputDecoration(
-                  labelText: 'Vehicle ID',
-                  helperText:
-                      'Enter the active vehicle document ID from the EV app.',
-                  border: OutlineInputBorder(),
-                ),
+                requestFocusOnTap: true,
+                expandedInsets: EdgeInsets.zero,
+                label: const Text('Vehicle ID'),
+                helperText:
+                    'Pick or type the vehicle document ID of the signed-in '
+                    'EV app user. It advertises as $advertisedName.',
+                dropdownMenuEntries: [
+                  for (final id in demoVehicleIds)
+                    DropdownMenuEntry(
+                      value: id,
+                      label: id,
+                      trailingIcon: Text(vehicleSimulatorNameFor(id)),
+                    ),
+                ],
               ),
               const SizedBox(height: 10),
               FilledButton.icon(

@@ -5,6 +5,27 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:vehicle_ble_protocol/vehicle_ble_protocol.dart';
 
 void main() {
+  group('simulator names', () {
+    test('match the seeded bluetoothDeviceName for each demo vehicle', () {
+      expect(vehicleSimulatorNameFor('EV001'), 'EV-Simulator-01');
+      expect(vehicleSimulatorNameFor('EV002'), 'EV-Simulator-02');
+      expect(vehicleSimulatorNameFor(' ev004 '), 'EV-Simulator-04');
+      expect(demoVehicleIds.map(vehicleSimulatorNameFor), [
+        'EV-Simulator-01',
+        'EV-Simulator-02',
+        'EV-Simulator-03',
+        'EV-Simulator-04',
+        'EV-Simulator-05',
+        'EV-Simulator-06',
+      ]);
+    });
+
+    test('fall back to the default name for other IDs', () {
+      expect(vehicleSimulatorNameFor('vehicle-1'), defaultVehicleSimulatorName);
+      expect(vehicleSimulatorNameFor('EV12345'), defaultVehicleSimulatorName);
+    });
+  });
+
   group('vehicle snapshot protocol', () {
     test('round-trips a snapshot with exactly four doors and windows', () {
       final snapshot = VehicleStateSnapshot(

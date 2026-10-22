@@ -413,8 +413,14 @@ class _VehicleControlsPageState extends State<VehicleControlsPage> {
             return _BleStatusCard(
               phase: matchesVehicle ? _ble.phase : VehicleBlePhase.stopped,
               error: matchesVehicle ? _ble.error : null,
-              onRetry: () => _ble.start(widget.vehicle.id),
-              onConnect: () => _ble.start(widget.vehicle.id),
+              onRetry: () => _ble.start(
+                widget.vehicle.id,
+                deviceName: widget.vehicle.bluetoothDeviceName,
+              ),
+              onConnect: () => _ble.start(
+                widget.vehicle.id,
+                deviceName: widget.vehicle.bluetoothDeviceName,
+              ),
               onDisconnect: () => unawaited(_ble.disconnect()),
               isWeb: kIsWeb,
               webBluetoothSupported: kIsWeb && _ble.isSupported,
