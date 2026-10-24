@@ -30,7 +30,8 @@ migrate_working_dir/
 .flutter-plugins-dependencies
 .pub-cache/
 .pub/
-/build/
+# Any build output, including packages/*/build and vehicle_simulator/build.
+build/
 /coverage/
 
 # Symbolication related

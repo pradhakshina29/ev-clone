@@ -50,6 +50,23 @@ unreachable.
 
 Payment receipts: see `docs/paypal-checkout.md`.
 
+## Deploying to Render
+
+`render.yaml` is a Render Blueprint (create it with New → Blueprint and the
+Blueprint path `backend/render.yaml`). It builds with
+`npm ci --include=dev && npm run build && npm prune --omit=dev`, because
+`NODE_ENV=production` would otherwise skip TypeScript during `npm ci`, and
+starts `node dist/server.js` on Render's `PORT`. Every other variable is
+`sync: false` and is entered in the Render dashboard; no value is stored in
+the repository. Use a new `JWT_SECRET` for production. Render's free plan has
+no fixed outbound IP, so Atlas Network Access must allow `0.0.0.0/0`.
+In production Mongoose does not build indexes automatically; the existing
+Atlas database already has them.
+
+The Flutter web build is static (`flutter build web --release`); `web/_redirects`
+makes Netlify serve `index.html` for app routes while real files such as
+`spotify_callback.html` are served as themselves.
+
 ## Troubleshooting
 
 - `bad auth : authentication failed`: the username or password in `MONGODB_URI`

@@ -1,0 +1,44 @@
+# Render Blueprint for the EV Smart Companion API.
+# Create it in Render with: New > Blueprint, Blueprint path "backend/render.yaml".
+# Values are never stored here: every `sync: false` variable is entered in the
+# Render dashboard when the Blueprint is created.
+services:
+  - type: web
+    name: ev-smart-companion-api
+    runtime: node
+    region: singapore
+    plan: free
+    rootDir: backend
+    # NODE_ENV=production makes `npm ci` skip devDependencies, but the build
+    # needs TypeScript; install them for the build, then prune them.
+    buildCommand: npm ci --include=dev && npm run build && npm prune --omit=dev
+    startCommand: npm start
+    healthCheckPath: /health
+    envVars:
+      - key: NODE_ENV
+        value: production
+      # Render's default port; the server reads process.env.PORT.
+      - key: PORT
+        value: "10000"
+      - key: MONGODB_URI
+        sync: false
+      - key: MONGODB_DB_NAME
+        sync: false
+      - key: JWT_SECRET
+        sync: false
+      - key: CORS_ORIGINS
+        sync: false
+      - key: GEMINI_API_KEY
+        sync: false
+      - key: GEMINI_MODEL
+        sync: false
+      - key: GEMINI_FALLBACK_MODEL
+        sync: false
+      - key: PAYPAL_CLIENT_ID
+        sync: false
+      - key: PAYPAL_CLIENT_SECRET
+        sync: false
+      - key: PAYPAL_API_BASE
+        sync: false
+      - key: DEMO_EXCHANGE_RATE_INR_TO_USD
+        sync: false
