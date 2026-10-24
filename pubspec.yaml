@@ -40,8 +40,6 @@ dependencies:
   geolocator: ^14.1.1
   image_picker: ^1.1.2
   http: ^1.6.0
-  model_viewer_pro: ^2.0.4
-  model_viewer_plus: ^1.10.0
   web: ^1.1.1
   bluetooth_low_energy: ^6.2.1
   vehicle_ble_protocol:
@@ -68,9 +66,6 @@ dev_dependencies:
 
 # The following section is specific to Flutter packages.
 flutter:
-
-  assets:
-    - assets/models/ev_health_car.glb
 
   # The following line ensures that the Material Icons font is
   # included with your application, so that you can use the icons in

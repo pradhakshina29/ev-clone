@@ -196,6 +196,125 @@ void main() {
     expect(tester.takeException(), isNull);
   });
 
+  testWidgets('has no interactive 3D vehicle section', (tester) async {
+    const vehicle = Vehicle(
+      id: 'health-no-3d-ev',
+      model: 'EV Smart X2',
+      registrationNumber: 'TEST',
+      ownerName: 'Driver',
+      vin: 'TEST-VIN',
+    );
+    final api = FakeApi()
+      ..on(
+        'GET /v1/vehicles/${vehicle.id}/maintenance',
+        (_) => {'records': <Object>[]},
+      );
+    await tester.pumpWidget(
+      MaterialApp(
+        home: VehicleHealthPage(
+          vehicle: vehicle,
+          dataService: api.dataService(),
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    expect(find.text('INTERACTIVE 3D VEHICLE'), findsNothing);
+    expect(find.textContaining('Drag to rotate'), findsNothing);
+    expect(find.textContaining('Unable to load vehicle model'), findsNothing);
+    expect(find.textContaining('CC0'), findsNothing);
+    expect(find.text('RETRY'), findsNothing);
+    expect(find.text('VEHICLE HEALTH SCORE'), findsOneWidget);
+    expect(find.text('Component health'), findsOneWidget);
+  });
+
+  testWidgets('battery values follow each new snapshot without a reload', (
+    tester,
+  ) async {
+    final ble = VehicleBleClient.shared;
+    addTearDown(() => ble.snapshot.value = null);
+    final history = VehicleHealthHistory(
+      snapshots: ble.snapshot,
+      interval: Duration.zero,
+    )..start();
+    addTearDown(history.dispose);
+    tester.view.physicalSize = const Size(1280, 900);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(tester.view.resetPhysicalSize);
+    addTearDown(tester.view.resetDevicePixelRatio);
+
+    const vehicle = Vehicle(
+      id: 'EV002',
+      model: 'EV Smart X2',
+      registrationNumber: 'TN02CD5678',
+      ownerName: 'Driver',
+      vin: 'EVVIN002',
+    );
+    final api = FakeApi()
+      ..on(
+        'GET /v1/vehicles/${vehicle.id}/maintenance',
+        (_) => {'records': <Object>[]},
+      );
+    VehicleStateSnapshot battery(
+      int sequence,
+      double percent,
+      double celsius,
+      double volts,
+    ) => VehicleStateSnapshot(
+      vehicleId: vehicle.id,
+      sequence: sequence,
+      timestampMillis: sequence * 1000,
+      state: VehicleControlState(
+        batteryPercent: percent,
+        rangeKm: percent * 3.5,
+        health: VehicleHealthState(
+          battery: BatteryHealthState(temperatureC: celsius, voltageV: volts),
+        ),
+      ),
+    );
+
+    ble.snapshot.value = battery(1, 75, 25, 397.5);
+    await tester.pumpWidget(
+      MaterialApp(
+        home: VehicleHealthPage(
+          vehicle: vehicle,
+          dataService: api.dataService(),
+          healthHistory: history,
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    expect(find.text('75%'), findsWidgets);
+    expect(find.text('263 km'), findsWidgets);
+    expect(find.text('25°C'), findsWidgets);
+    expect(find.text('397.5 V'), findsOneWidget);
+    expect(find.text('94%'), findsWidgets);
+    expect(find.text('60.0 kWh'), findsOneWidget);
+    expect(find.text('Battery · GOOD'), findsOneWidget);
+    expect(find.textContaining('1 readings this session'), findsOneWidget);
+
+    // Same page instance: only the shared snapshot changes.
+    ble.snapshot.value = battery(2, 40, 48, 366);
+    await tester.pump(const Duration(milliseconds: 100));
+
+    expect(find.text('75%'), findsNothing);
+    expect(find.text('40%'), findsWidgets);
+    expect(find.text('140 km'), findsWidgets);
+    expect(find.text('48°C'), findsWidgets);
+    expect(find.text('366.0 V'), findsOneWidget);
+    expect(find.text('Battery · WARNING'), findsOneWidget);
+    expect(find.textContaining('2 readings this session'), findsOneWidget);
+
+    ble.snapshot.value = null;
+    await tester.pumpAndSettle();
+    expect(find.text('40%'), findsNothing);
+    expect(find.text('48°C'), findsNothing);
+    expect(find.text('366.0 V'), findsNothing);
+    expect(find.text('Not reported'), findsWidgets);
+    expect(tester.takeException(), isNull);
+  });
+
   testWidgets('renders data unavailable states without fake sensor values', (
     tester,
   ) async {

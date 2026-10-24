@@ -1,9 +1,6 @@
 import 'dart:async';
 
-import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
-import 'package:model_viewer_plus/model_viewer_plus.dart';
-import 'package:model_viewer_pro/model_viewer_pro.dart';
 import 'package:vehicle_ble_protocol/vehicle_ble_protocol.dart';
 
 import '../app_theme.dart';
@@ -13,9 +10,6 @@ import '../models/vehicle_telemetry.dart';
 import '../services/data_service.dart';
 import '../services/vehicle_health_history.dart';
 import '../widgets/vehicle_ble_state_view.dart';
-import '../services/vehicle_model_load_bridge_stub.dart'
-    if (dart.library.js_interop) '../services/vehicle_model_load_bridge_web.dart'
-    as model_bridge;
 import 'maintenance.dart';
 
 const _ink = Color(0xFF071326);
@@ -25,7 +19,6 @@ const _blue = Color(0xFF2789D7);
 const _green = Color(0xFF1EA76A);
 const _amber = Color(0xFFE4A22F);
 const _red = Color(0xFFD93C4E);
-const _modelAsset = 'assets/models/ev_health_car.glb';
 
 class VehicleHealthPage extends StatefulWidget {
   const VehicleHealthPage({
@@ -103,10 +96,6 @@ class _VehicleHealthPageState extends State<VehicleHealthPage> {
                             ),
                             const SizedBox(height: 14),
                             _HealthScorePanel(health: health),
-                            const SizedBox(height: 16),
-                            _VehicleModelCard(
-                              vehicleName: widget.vehicle.model,
-                            ),
                             const SizedBox(height: 25),
                             _SectionHeading(
                               eyebrow: 'QUICK STATUS',
@@ -2032,304 +2021,6 @@ class _DataDisclosure extends StatelessWidget {
       style: const TextStyle(color: _ink, fontSize: 10, height: 1.45),
     ),
   );
-}
-
-class _VehicleModelCard extends StatefulWidget {
-  const _VehicleModelCard({required this.vehicleName});
-
-  final String vehicleName;
-
-  @override
-  State<_VehicleModelCard> createState() => _VehicleModelCardState();
-}
-
-class _VehicleModelCardState extends State<_VehicleModelCard> {
-  final ModelViewerProController _controller = ModelViewerProController();
-  StreamSubscription<model_bridge.VehicleModelLoadEvent>? _webLoadSubscription;
-  Timer? _loadTimeout;
-  bool _modelLoaded = false;
-  bool _modelFailed = false;
-  String? _error;
-  int _retryKey = 0;
-
-  bool get _usesHtmlViewer => kIsWeb;
-  bool get _supported =>
-      kIsWeb ||
-      Theme.of(context).platform == TargetPlatform.android ||
-      Theme.of(context).platform == TargetPlatform.iOS ||
-      Theme.of(context).platform == TargetPlatform.macOS;
-
-  @override
-  void initState() {
-    super.initState();
-    if (kIsWeb) {
-      model_bridge.initializeVehicleModelLoadBridge();
-      _webLoadSubscription = model_bridge.vehicleModelLoadEvents.listen((
-        event,
-      ) {
-        if (!mounted) return;
-        _loadTimeout?.cancel();
-        setState(() {
-          _modelLoaded = event.loaded;
-          _modelFailed = !event.loaded;
-          _error = event.error;
-        });
-        if (!event.loaded) {
-          debugPrint('EV GLB web rendering failed: ${event.error}');
-        }
-      });
-    }
-    _startLoadTimeout();
-  }
-
-  @override
-  void dispose() {
-    _webLoadSubscription?.cancel();
-    _loadTimeout?.cancel();
-    _controller.dispose();
-    super.dispose();
-  }
-
-  String get _modelSource => kIsWeb
-      ? Uri.base.resolve('assets/assets/models/ev_health_car.glb').toString()
-      : _modelAsset;
-
-  String get _webModelEventsScript =>
-      '''
-    (() => {
-      const viewer = document.querySelector('model-viewer');
-      if (!viewer || viewer.dataset.evHealthEvents === '$_retryKey') return;
-      viewer.dataset.evHealthEvents = '$_retryKey';
-      const send = (status, error) => window.postMessage({
-        source: 'ev-smart-companion-model',
-        status,
-        error: error || null
-      }, '*');
-      viewer.addEventListener('load', () => send('loaded'), { once: true });
-      viewer.addEventListener('error', event =>
-        send('error', event.detail?.type || 'Unable to parse or render this GLB'),
-        { once: true }
-      );
-      if (viewer.loaded) send('loaded');
-    })();
-  ''';
-
-  void _onNativeModelLoad(List<String> meshNames) {
-    if (!mounted) return;
-    _loadTimeout?.cancel();
-    final success = meshNames.isNotEmpty;
-    setState(() {
-      _modelLoaded = success;
-      _modelFailed = !success;
-      _error = success
-          ? null
-          : 'The viewer could not discover meshes in the bundled GLB.';
-    });
-    if (success) {
-      _controller.setShadowIntensity(0.75);
-      _controller.setShadowSoftness(0.85);
-      _controller.setExposure(1.15);
-      debugPrint('EV GLB loaded. Available meshes: $meshNames');
-    } else {
-      debugPrint('EV GLB load failed. Source: $_modelSource');
-    }
-  }
-
-  void _retry() {
-    _loadTimeout?.cancel();
-    setState(() {
-      _retryKey++;
-      _modelLoaded = false;
-      _modelFailed = false;
-      _error = null;
-    });
-    _startLoadTimeout();
-  }
-
-  void _startLoadTimeout() {
-    _loadTimeout = Timer(const Duration(seconds: 40), () {
-      if (!mounted || _modelLoaded || _modelFailed || !_supported) return;
-      debugPrint('EV GLB load timed out. Source: $_modelSource');
-      setState(() {
-        _modelFailed = true;
-        _error = 'Timed out while loading the bundled vehicle model.';
-      });
-    });
-  }
-
-  void _resetView() {
-    if (_usesHtmlViewer) {
-      _retry();
-      return;
-    }
-    _controller.resetCamera();
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    final height = MediaQuery.sizeOf(context).width < 600 ? 330.0 : 430.0;
-    const orbit = '45deg 68deg auto';
-    return _Panel(
-      padding: const EdgeInsets.all(15),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Row(
-            children: [
-              Expanded(
-                child: _SectionHeading(
-                  eyebrow: 'INTERACTIVE 3D VEHICLE',
-                  title: widget.vehicleName.isEmpty
-                      ? 'Explore your EV'
-                      : widget.vehicleName,
-                ),
-              ),
-              if (_modelLoaded)
-                TextButton.icon(
-                  onPressed: _resetView,
-                  icon: const Icon(Icons.refresh_rounded, size: 17),
-                  label: const Text('RESET VIEW'),
-                ),
-            ],
-          ),
-          const SizedBox(height: 11),
-          ClipRRect(
-            borderRadius: BorderRadius.circular(20),
-            child: SizedBox(
-              height: height,
-              width: double.infinity,
-              child: Stack(
-                fit: StackFit.expand,
-                children: [
-                  if (_supported)
-                    _usesHtmlViewer
-                        ? ModelViewer(
-                            key: ValueKey(_retryKey),
-                            src: _modelSource,
-                            alt: 'Interactive 3D EV model',
-                            backgroundColor: const Color(0xFFF1F4F7),
-                            cameraControls: true,
-                            autoRotate: false,
-                            disableZoom: false,
-                            cameraOrbit: orbit,
-                            cameraTarget: 'auto auto auto',
-                            fieldOfView: '30deg',
-                            minCameraOrbit: 'auto 20deg auto',
-                            maxCameraOrbit: 'auto 88deg auto',
-                            shadowIntensity: 0.75,
-                            shadowSoftness: 0.85,
-                            exposure: 1.15,
-                            loading: Loading.eager,
-                            reveal: Reveal.auto,
-                            relatedJs: _webModelEventsScript,
-                          )
-                        : ModelViewerProViewer(
-                            key: ValueKey(_retryKey),
-                            src: _modelSource,
-                            controller: _controller,
-                            alt: 'Interactive 3D EV model',
-                            backgroundColor: const Color(0xFFF1F4F7),
-                            cameraControls: true,
-                            autoRotate: false,
-                            disableZoom: false,
-                            cameraOrbit: orbit,
-                            cameraTarget: 'auto auto auto',
-                            fieldOfView: '30deg',
-                            minCameraOrbit: 'auto 20deg auto',
-                            maxCameraOrbit: 'auto 88deg auto',
-                            shadowIntensity: 0.75,
-                            shadowSoftness: 0.85,
-                            exposure: 1.15,
-                            onLoad: _onNativeModelLoad,
-                          ),
-                  if (!_modelLoaded)
-                    ColoredBox(
-                      color: const Color(0xFFF1F4F7).withValues(alpha: 0.94),
-                      child: Center(
-                        child: Padding(
-                          padding: const EdgeInsets.all(24),
-                          child: Column(
-                            mainAxisSize: MainAxisSize.min,
-                            children: [
-                              Icon(
-                                !_supported
-                                    ? Icons.desktop_access_disabled_rounded
-                                    : _modelFailed
-                                    ? Icons.view_in_ar_outlined
-                                    : Icons.threed_rotation_rounded,
-                                color: _modelFailed ? _red : _blue,
-                                size: 37,
-                              ),
-                              const SizedBox(height: 10),
-                              Text(
-                                !_supported
-                                    ? '3D viewer is not supported on this platform'
-                                    : _modelFailed
-                                    ? 'Unable to load vehicle model.'
-                                    : 'Loading your vehicle...',
-                                textAlign: TextAlign.center,
-                                style: const TextStyle(
-                                  color: _ink,
-                                  fontWeight: FontWeight.w800,
-                                ),
-                              ),
-                              if (_error != null) ...[
-                                const SizedBox(height: 6),
-                                Text(
-                                  _error!,
-                                  textAlign: TextAlign.center,
-                                  style: const TextStyle(
-                                    color: _muted,
-                                    fontSize: 11,
-                                  ),
-                                ),
-                              ],
-                              if (_modelFailed) ...[
-                                const SizedBox(height: 12),
-                                OutlinedButton.icon(
-                                  onPressed: _retry,
-                                  icon: const Icon(Icons.refresh_rounded),
-                                  label: const Text('RETRY'),
-                                ),
-                              ],
-                            ],
-                          ),
-                        ),
-                      ),
-                    ),
-                ],
-              ),
-            ),
-          ),
-          const SizedBox(height: 10),
-          Row(
-            children: [
-              const Icon(Icons.open_with_rounded, color: _blue, size: 17),
-              const SizedBox(width: 7),
-              const Expanded(
-                child: Text(
-                  'Drag to rotate • Scroll or pinch to zoom',
-                  style: TextStyle(color: _muted, fontSize: 12),
-                ),
-              ),
-              if (_modelLoaded)
-                TextButton(
-                  onPressed: _resetView,
-                  child: const Text('RESET VIEW'),
-                ),
-            ],
-          ),
-          const SizedBox(height: 3),
-          const Text(
-            'This bundled CC0 sample is a generic toy-car model, not a scan of '
-            'your specific EV. Its meshes do not expose separate vehicle '
-            'components for 3D highlighting.',
-            style: TextStyle(color: _muted, fontSize: 10, height: 1.4),
-          ),
-        ],
-      ),
-    );
-  }
 }
 
 class _SectionHeading extends StatelessWidget {
