@@ -967,7 +967,7 @@ class _ChargingStationPageState extends State<ChargingStationPage> {
           children: [
             TileLayer(
               urlTemplate: 'https://tile.openstreetmap.org/{z}/{x}/{y}.png',
-              userAgentPackageName: 'com.example.flutter_application_2',
+              userAgentPackageName: 'com.pradhu.evsmartcompanion',
             ),
             if (rangeKm != null && rangeKm > 0)
               CircleLayer(

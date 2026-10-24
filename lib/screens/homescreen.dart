@@ -10,9 +10,11 @@ import '../services/distance_unit_service.dart';
 import '../services/data_service.dart';
 import '../services/weather_service.dart';
 import '../widgets/vehicle_ble_state_view.dart';
+import '../widgets/ev_logo.dart';
 import '../widgets/weather_card.dart';
 import 'charging_station_page.dart';
 import 'maintenance.dart';
+import 'music_page.dart';
 import 'learn_screen.dart';
 import 'profile_page.dart';
 import '../services/learning_assistant_service.dart';
@@ -253,6 +255,10 @@ class _HomeScreenState extends State<HomeScreen> {
                         builder: (_) => MaintenancePage(vehicle: vehicle),
                       ),
                     ),
+                    onMusic: () => Navigator.push(
+                      context,
+                      MaterialPageRoute(builder: (_) => const MusicPage()),
+                    ),
                   );
 
                   return Center(
@@ -372,15 +378,7 @@ class _DashboardHeader extends StatelessWidget {
   @override
   Widget build(BuildContext context) => Row(
     children: [
-      Container(
-        width: 42,
-        height: 42,
-        decoration: BoxDecoration(
-          color: AppTheme.navy,
-          borderRadius: BorderRadius.circular(14),
-        ),
-        child: const Icon(Icons.bolt_rounded, color: Color(0xFF71D6C0)),
-      ),
+      const EVLogoMark(size: 42),
       const SizedBox(width: 12),
       Expanded(
         child: Column(
@@ -907,12 +905,14 @@ class _QuickActions extends StatelessWidget {
     required this.onTripPlanner,
     required this.onHealth,
     required this.onMaintenance,
+    required this.onMusic,
   });
 
   final VoidCallback onControls;
   final VoidCallback onTripPlanner;
   final VoidCallback onHealth;
   final VoidCallback onMaintenance;
+  final VoidCallback onMusic;
 
   @override
   Widget build(BuildContext context) => LayoutBuilder(
@@ -950,6 +950,14 @@ class _QuickActions extends StatelessWidget {
           const Color(0xFFFFF1E2),
           const Color(0xFFCC8128),
           onMaintenance,
+        ),
+        _ActionItem(
+          'Music',
+          'Spotify search & play',
+          Icons.library_music_outlined,
+          const Color(0xFFE6F6EC),
+          const Color(0xFF1E8E4E),
+          onMusic,
         ),
       ];
       final spacing = 10.0;

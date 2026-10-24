@@ -46,6 +46,10 @@ dependencies:
   bluetooth_low_energy: ^6.2.1
   vehicle_ble_protocol:
     path: packages/vehicle_ble_protocol
+  share_plus: ^13.3.1
+  flutter_web_auth_2: ^5.1.0
+  flutter_secure_storage: ^11.2.0
+  crypto: ^3.0.7
 
 dev_dependencies:
   flutter_test:
@@ -57,6 +61,7 @@ dev_dependencies:
   # package. See that file for information about deactivating specific lint
   # rules and activating additional ones.
   flutter_lints: ^6.0.0
+  flutter_launcher_icons: ^0.14.4
 
 # For information on the generic Dart part of this file, see the
 # following page: https://dart.dev/tools/pub/pubspec
@@ -102,3 +107,14 @@ flutter:
   #
   # For details regarding fonts from package dependencies,
   # see https://flutter.dev/to/font-from-package
+
+# Launcher icons are rendered from lib/widgets/ev_logo.dart by
+# tool/generate_launcher_icon.dart; regenerate with `dart run flutter_launcher_icons`.
+flutter_launcher_icons:
+  android: true
+  ios: true
+  image_path: "assets/icon/app_icon.png"
+  adaptive_icon_background: "#0B1524"
+  adaptive_icon_foreground: "assets/icon/app_icon_foreground.png"
+  min_sdk_android: 24
+  remove_alpha_ios: true

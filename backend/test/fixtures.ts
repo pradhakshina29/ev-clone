@@ -36,7 +36,13 @@ const unexpected: Handler = (url) => {
 };
 
 export function apiApp(
-  options: { paypalFetch?: typeof fetch; geminiFetch?: typeof fetch; geminiKey?: string } = {},
+  options: {
+    paypalFetch?: typeof fetch;
+    geminiFetch?: typeof fetch;
+    geminiKey?: string;
+    geminiFallbackModel?: string;
+    geoFetch?: typeof fetch;
+  } = {},
 ) {
   return createApp({
     nodeEnv: 'test',
@@ -53,8 +59,10 @@ export function apiApp(
       assistant: {
         apiKey: options.geminiKey ?? 'test-only-gemini-key',
         model: 'gemini-flash-latest',
+        fallbackModel: options.geminiFallbackModel,
         fetch: options.geminiFetch ?? fakeFetch(unexpected).fetch,
       },
+      geo: { fetch: options.geoFetch ?? fakeFetch(unexpected).fetch },
     }),
   });
 }

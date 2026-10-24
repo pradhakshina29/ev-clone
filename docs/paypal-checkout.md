@@ -12,6 +12,35 @@ again returns the original result without a second credit. The app receives
 only the order ID, approval URL and the public PayPal client ID; the PayPal
 secret and OAuth token stay in `backend/.env`.
 
+## Payment receipts (PDF)
+
+After a verified capture the backend creates one receipt record per credit
+transaction (`invoices` collection, unique per transaction) with a sequential
+number such as `EVSC-TEST-2026-000001`. Creating it never touches the payment:
+if it fails, the capture still succeeds and the receipt is created on the
+first download instead.
+
+- `GET /v1/vehicles/{vehicleId}/charging-card/transactions/{transactionId}/invoice`
+  returns the receipt details (creating it if needed).
+- `GET …/invoice.pdf` returns the PDF (`Cache-Control: private, no-store`).
+
+Both need the owner's access token; another user's transaction answers 404.
+Only PayPal credits whose order is `COMPLETED` with a matching capture ID get
+a receipt (others answer 409 `invoice_unavailable`). The PDF is generated on
+each download from stored, verified data; no file or public URL exists.
+Sandbox receipts are marked **SANDBOX — TEST TRANSACTION** and state that no
+real money moved.
+
+These are payment receipts, not tax invoices. A legally compliant tax invoice
+(for example a GST invoice in India) would also need the seller's legal name,
+address and tax registration number (GSTIN), place of supply, HSN/SAC code,
+and a tax breakdown; none of these exist in the project, so none are invented.
+
+In the app, **Download invoice** appears on the recharge-success screen and on
+each verified PayPal recharge in the transaction history. It hands the PDF to
+the share sheet on Android/iOS (save to Files, Drive or open in a PDF viewer)
+and downloads it on the web.
+
 ## Web
 
 Flutter Web uses PayPal's official JavaScript SDK v6 Sandbox core and one-time

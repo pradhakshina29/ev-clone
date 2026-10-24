@@ -4,6 +4,7 @@ import 'package:latlong2/latlong.dart';
 import 'package:url_launcher/url_launcher.dart';
 import 'package:vehicle_ble_protocol/vehicle_ble_protocol.dart';
 
+import '../services/api/api_client.dart';
 import '../services/auth_service.dart';
 import '../app_theme.dart';
 import '../models/charging_station.dart';
@@ -52,6 +53,9 @@ class _TripPlannerPageState extends State<TripPlannerPage> {
   TripPlanningResult? _result;
   GeocodedDestination? _selectedDestination;
   String _destinationQuery = '';
+  // Empty source means the trip starts at the detected current location.
+  GeocodedDestination? _selectedSource;
+  String _sourceQuery = '';
   String? _errorMessage;
   String? _locationMessage;
   String? _locationError;
@@ -106,11 +110,14 @@ class _TripPlannerPageState extends State<TripPlannerPage> {
     final selectedDestination = _selectedDestination;
     final destinationQuery =
         selectedDestination?.displayLabel ?? _destinationQuery.trim();
-    final start = _start;
+    final sourceQuery = _selectedSource?.displayLabel ?? _sourceQuery.trim();
     final battery = state?.batteryPercent;
     final currentRangeKm = state?.rangeKm;
-    if (start == null) {
-      setState(() => _errorMessage = 'Detect your current location first.');
+    if (sourceQuery.isEmpty && _start == null) {
+      setState(
+        () => _errorMessage =
+            'Detect your current location or enter a starting point.',
+      );
       return;
     }
     if (destinationQuery.isEmpty) {
@@ -139,6 +146,11 @@ class _TripPlannerPageState extends State<TripPlannerPage> {
       _errorMessage = null;
     });
     try {
+      final start = sourceQuery.isEmpty
+          ? _start!
+          : (_selectedSource ?? await _directions.geocode(sourceQuery))
+                .location;
+      if (!mounted || generation != _requestGeneration) return;
       final vehicleState = _feasibility.createVehicleState(
         vehicleId: vehicle.id,
         vehicleModel: vehicle.model,
@@ -164,11 +176,22 @@ class _TripPlannerPageState extends State<TripPlannerPage> {
       if (!mounted || generation != _requestGeneration) return;
       setState(() {
         _planning = false;
-        _errorMessage = error is MapServiceBusyException
-            ? '${error.message} Tap Plan Trip to retry.'
-            : 'Could not plan this trip. Check the destination and your network connection, then retry. ($error)';
+        _errorMessage = tripPlanningErrorMessage(error);
       });
     }
+  }
+
+  void _sourceChanged(String value) {
+    _sourceQuery = value;
+    _selectedSource = null;
+    _invalidatePlan();
+  }
+
+  void _sourceSelected(GeocodedDestination? place) {
+    if (place == null) return;
+    _selectedSource = place;
+    _sourceQuery = place.displayLabel;
+    _invalidatePlan();
   }
 
   Future<void> _changeVehicle(String uid, String vehicleId) async {
@@ -399,8 +422,20 @@ class _TripPlannerPageState extends State<TripPlannerPage> {
         _locationPicker(),
         const SizedBox(height: 12),
         DestinationAutocompleteField(
+          labelText: 'Starting point (optional)',
+          hintText: 'Leave empty to start from your current location',
+          prefixIcon: Icons.trip_origin,
           searchPlaces: (query) =>
               _directions.searchPlaces(query, proximity: _start),
+          onQueryChanged: _sourceChanged,
+          onPlaceSelected: _sourceSelected,
+        ),
+        const SizedBox(height: 12),
+        DestinationAutocompleteField(
+          searchPlaces: (query) => _directions.searchPlaces(
+            query,
+            proximity: _selectedSource?.location ?? _start,
+          ),
           onQueryChanged: _destinationChanged,
           onPlaceSelected: _destinationSelected,
         ),
@@ -497,7 +532,7 @@ class _TripPlannerPageState extends State<TripPlannerPage> {
         title: Text(_start == null ? 'Starting location' : 'Current location'),
         subtitle: Text(
           _start == null
-              ? 'Your location is used as the route origin.'
+              ? 'Used as the route origin unless you enter a starting point.'
               : '${_start!.latitude.toStringAsFixed(5)}, '
                     '${_start!.longitude.toStringAsFixed(5)}',
         ),
@@ -544,7 +579,7 @@ class _TripPlannerPageState extends State<TripPlannerPage> {
               children: [
                 TileLayer(
                   urlTemplate: 'https://tile.openstreetmap.org/{z}/{x}/{y}.png',
-                  userAgentPackageName: 'com.example.flutter_application_2',
+                  userAgentPackageName: 'com.pradhu.evsmartcompanion',
                 ),
                 PolylineLayer(
                   polylines: [
@@ -785,4 +820,27 @@ class _TripPlannerPageState extends State<TripPlannerPage> {
     if (hours == 0) return '$minutes min';
     return '$hours h $minutes min';
   }
+}
+
+/// What the trip planner shows for a failed plan; never the raw exception.
+@visibleForTesting
+String tripPlanningErrorMessage(Object error) {
+  if (error is MapServiceBusyException) {
+    return '${error.message} Tap Plan Trip to retry.';
+  }
+  if (error is RoadDirectionsException) return error.message;
+  if (error is ApiException && error.statusCode == 429) return error.message;
+  if (error is FormatException) {
+    if (error.message.contains('No matching destination')) {
+      return 'That place could not be found. Check the spelling or pick a suggestion from the list.';
+    }
+    if (error.message.contains('driving route could not be found')) {
+      return 'No driving route exists between these places. Choose places reachable by road.';
+    }
+    return 'The map service sent an unexpected answer. Please try again.';
+  }
+  if (error is ArgumentError) {
+    return 'Enter a starting point and destination to plan your trip.';
+  }
+  return 'Could not plan this trip. Check your network connection, then retry.';
 }

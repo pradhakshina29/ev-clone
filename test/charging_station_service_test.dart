@@ -1,5 +1,6 @@
 import 'dart:async';
 import 'dart:convert';
+import 'dart:io';
 
 import 'package:flutter_test/flutter_test.dart';
 import 'package:flutter_application_2/models/charging_station.dart';
@@ -7,6 +8,8 @@ import 'package:flutter_application_2/services/charging_station_service.dart';
 import 'package:http/http.dart' as http;
 import 'package:http/testing.dart';
 import 'package:latlong2/latlong.dart';
+
+import 'support/fake_api.dart';
 
 void main() {
   group('ChargingStation', () {
@@ -139,7 +142,10 @@ void main() {
           200,
         );
       });
-      final service = ChargingStationService(client: client);
+      final service = ChargingStationService(
+        client: client,
+        api: FakeApi().client(),
+      );
       addTearDown(service.close);
 
       final stations = await service.findNearbyStations(
@@ -226,7 +232,10 @@ void main() {
           200,
         );
       });
-      final service = ChargingStationService(client: client);
+      final service = ChargingStationService(
+        client: client,
+        api: FakeApi().client(),
+      );
       addTearDown(service.close);
 
       final stations = await service.findNearbyStations(
@@ -293,7 +302,10 @@ void main() {
         200,
       );
     });
-    final service = ChargingStationService(client: client);
+    final service = ChargingStationService(
+      client: client,
+      api: FakeApi().client(),
+    );
     addTearDown(service.close);
 
     final stations = await service.findAlongRoute(
@@ -343,7 +355,10 @@ void main() {
           200,
         );
       });
-      final service = ChargingStationService(client: client);
+      final service = ChargingStationService(
+        client: client,
+        api: FakeApi().client(),
+      );
       addTearDown(service.close);
 
       final stations = await service.findAlongEntireRoute(
@@ -395,11 +410,68 @@ void main() {
 
       final stations = await ChargingStationService(
         client: client,
+        api: FakeApi().client(),
       ).findNearbyStations(center: center, radiusKm: 5);
 
       expect(stations, hasLength(1));
       expect(hosts, contains('overpass-api.de'));
       expect(hosts.last, isNot('overpass-api.de'));
+    });
+
+    test('searches through the backend before any public server', () async {
+      final api = FakeApi()
+        ..on('POST /v1/geo/overpass', (_) => jsonDecode(okBody));
+      final client = MockClient((request) async {
+        fail('Unexpected direct request to ${request.url.host}');
+      });
+
+      final stations = await ChargingStationService(
+        client: client,
+        api: api.client(),
+      ).findNearbyStations(center: center, radiusKm: 5);
+
+      expect(stations, hasLength(1));
+      final sent = jsonDecode(api.requests.single.body) as Map;
+      expect(sent['data'], contains('nwr["amenity"="charging_station"]'));
+      expect(api.requests.single.headers['Authorization'], 'Bearer test-token');
+    });
+
+    test('a query the backend rejects is not retried directly', () async {
+      final api = FakeApi()
+        ..on('POST /v1/geo/overpass', (_) => const FakeReply(400));
+      var directCalls = 0;
+      final client = MockClient((_) async {
+        directCalls++;
+        return http.Response(okBody, 200);
+      });
+
+      await expectLater(
+        ChargingStationService(
+          client: client,
+          api: api.client(),
+        ).findNearbyStations(center: const LatLng(12.7, 80.0), radiusKm: 5),
+        throwsA(isA<StateError>()),
+      );
+      expect(directCalls, 0);
+    });
+
+    test('a TLS failure on one server falls through to the next', () async {
+      final hosts = <String>[];
+      final client = MockClient((request) async {
+        hosts.add(request.url.host);
+        if (hosts.length == 1) {
+          throw const HandshakeException('CERTIFICATE_VERIFY_FAILED');
+        }
+        return http.Response(okBody, 200);
+      });
+
+      final stations = await ChargingStationService(
+        client: client,
+        api: FakeApi().client(),
+      ).findNearbyStations(center: center, radiusKm: 5);
+
+      expect(stations, hasLength(1));
+      expect(hosts, hasLength(2));
     });
 
     test('an Overpass runtime-error reply is treated as busy', () async {
@@ -419,6 +491,7 @@ void main() {
 
       final stations = await ChargingStationService(
         client: client,
+        api: FakeApi().client(),
       ).findNearbyStations(center: const LatLng(13.1, 80.3), radiusKm: 5);
 
       expect(calls, 2);
@@ -435,6 +508,7 @@ void main() {
       await expectLater(
         ChargingStationService(
           client: client,
+          api: FakeApi().client(),
         ).findNearbyStations(center: const LatLng(12.9, 80.2), radiusKm: 5),
         throwsA(
           isA<MapServiceBusyException>().having(
@@ -458,6 +532,7 @@ void main() {
 
       final stations = await ChargingStationService(
         client: client,
+        api: FakeApi().client(),
       ).findNearbyStations(center: center, radiusKm: 5);
 
       expect(stations, hasLength(1));
@@ -474,7 +549,7 @@ void main() {
             : Future.value(http.Response(okBody, 200));
       });
       List<ChargingStation>? stations;
-      ChargingStationService(client: client)
+      ChargingStationService(client: client, api: FakeApi().client())
           .findNearbyStations(center: center, radiusKm: 5)
           .then((value) => stations = value);
 
@@ -493,7 +568,7 @@ void main() {
     ) async {
       final client = MockClient((_) => Completer<http.Response>().future);
       Object? error;
-      ChargingStationService(client: client)
+      ChargingStationService(client: client, api: FakeApi().client())
           .findNearbyStations(center: const LatLng(12.5, 79.8), radiusKm: 5)
           .catchError((Object e) {
             error = e;
@@ -518,6 +593,7 @@ void main() {
       await expectLater(
         ChargingStationService(
           client: client,
+          api: FakeApi().client(),
         ).findNearbyStations(center: const LatLng(12.8, 80.1), radiusKm: 5),
         throwsA(isA<StateError>()),
       );

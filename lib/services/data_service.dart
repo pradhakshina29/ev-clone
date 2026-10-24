@@ -545,6 +545,37 @@ class DataService {
     return response;
   }
 
+  /// The payment receipt PDF for a verified PayPal recharge, with its file
+  /// name. The backend creates the receipt on first request, so this is also
+  /// the safe retry when creating it right after capture failed; it never
+  /// repeats the payment.
+  Future<(String, Uint8List)> downloadRechargeInvoice({
+    required String vehicleId,
+    required String transactionId,
+  }) async {
+    final path =
+        '${_vehiclePath(vehicleId)}/charging-card/transactions/'
+        '${Uri.encodeComponent(transactionId.trim())}/invoice';
+    final invoice = _map(_map(await _api.get(path))['invoice']);
+    final bytes = await _api.getBytes('$path.pdf');
+    if (bytes == null ||
+        bytes.length < 5 ||
+        String.fromCharCodes(bytes.take(5)) != '%PDF-') {
+      throw const ApiException(
+        404,
+        'invoice_not_found',
+        'The receipt could not be downloaded. Please try again.',
+      );
+    }
+    final number = invoice['invoiceNumber'];
+    return (
+      number is String && RegExp(r'^[A-Z0-9-]{1,40}$').hasMatch(number)
+          ? '$number.pdf'
+          : 'EV-Smart-Companion-receipt.pdf',
+      bytes,
+    );
+  }
+
   /// Debits only a server-confirmed charging session; the client cannot submit
   /// the amount or station details used by the backend.
   Future<ChargingCard> debitChargingCardAfterConfirmedSession({

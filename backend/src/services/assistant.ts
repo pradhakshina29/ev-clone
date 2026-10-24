@@ -7,9 +7,16 @@ export const MAX_QUESTION_LENGTH = 2000;
 export const MAX_TOPIC_LENGTH = 120;
 export const MAX_CONTEXT_LENGTH = 2000;
 const ENDPOINT = 'https://generativelanguage.googleapis.com/v1beta/interactions';
-const TIMEOUT_MS = 15_000;
+// Leaves room for one fallback attempt inside the app's 60 s request timeout.
+const TIMEOUT_MS = 20_000;
 
-export type AssistantConfig = { apiKey: string; model: string; fetch: typeof fetch };
+export type AssistantConfig = {
+  apiKey: string;
+  model: string;
+  /** Another Gemini model tried once when [model] is overloaded or rate limited. */
+  fallbackModel?: string;
+  fetch: typeof fetch;
+};
 
 const SYSTEM_INSTRUCTION = [
   'You are EV Smart Companion Assistant, an educational tutor for electric-vehicle owners.',
@@ -65,13 +72,49 @@ export async function askLearningAssistant(
     .filter(Boolean)
     .join('\n\n');
 
+  const models = [config.model, config.fallbackModel].filter(
+    (model, index, all): model is string => !!model && all.indexOf(model) === index,
+  );
+  let failure: ModelFailure = 'unavailable';
+  for (const model of models) {
+    const result = await askModel(config, model, userPrompt);
+    if (typeof result === 'string') return result;
+    failure = result.failure;
+    // Only an overloaded or rate-limited model is worth retrying on another
+    // Gemini model; a rejected key or bad request would fail the same way.
+    if (failure !== 'busy') break;
+  }
+  if (failure === 'busy') {
+    throw new HttpError(
+      503,
+      'assistant_busy',
+      'The EV learning assistant is busy right now. Please try again in a minute.',
+    );
+  }
+  if (failure === 'rejected') {
+    throw new HttpError(
+      503,
+      'assistant_not_configured',
+      'The EV learning assistant is not configured correctly. Please contact support.',
+    );
+  }
+  throw temporarilyUnavailable();
+}
+
+type ModelFailure = 'busy' | 'rejected' | 'unavailable';
+
+async function askModel(
+  config: AssistantConfig,
+  model: string,
+  userPrompt: string,
+): Promise<string | { failure: ModelFailure }> {
   let response: Response;
   try {
     response = await config.fetch(ENDPOINT, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', 'x-goog-api-key': config.apiKey },
       body: JSON.stringify({
-        model: config.model,
+        model,
         input: userPrompt,
         system_instruction: SYSTEM_INSTRUCTION,
         generation_config: { temperature: 0.3, max_output_tokens: 700 },
@@ -81,37 +124,50 @@ export async function askLearningAssistant(
     });
   } catch (error) {
     logger.error(
-      { errorName: error instanceof Error ? error.name : 'Error' },
+      { model, errorName: error instanceof Error ? error.name : 'Error' },
       'Learning assistant provider request failed',
     );
-    throw temporarilyUnavailable();
+    // An overloaded model often hangs instead of answering 503.
+    return {
+      failure: error instanceof Error && error.name === 'TimeoutError' ? 'busy' : 'unavailable',
+    };
   }
 
   let body: string;
   try {
     body = await response.text();
   } catch {
-    logger.error({ httpStatus: response.status }, 'Could not read the learning assistant response');
-    throw temporarilyUnavailable();
+    logger.error(
+      { model, httpStatus: response.status },
+      'Could not read the learning assistant response',
+    );
+    return { failure: 'unavailable' };
   }
 
   if (!response.ok) {
     logger.error(
       {
+        model,
         httpStatus: response.status,
         providerMessage: redact(providerErrorMessage(body), config.apiKey).slice(0, 500),
       },
       'Learning assistant provider rejected the request',
     );
-    throw temporarilyUnavailable();
+    if (response.status === 429 || response.status === 503) return { failure: 'busy' };
+    // 400 (invalid key), 401/403 (key or project disabled), 404 (retired model).
+    if ([400, 401, 403, 404].includes(response.status)) return { failure: 'rejected' };
+    return { failure: 'unavailable' };
   }
 
   let payload: { output_text?: unknown; steps?: unknown };
   try {
     payload = JSON.parse(body) as typeof payload;
   } catch {
-    logger.error({ httpStatus: response.status }, 'Learning assistant returned invalid JSON');
-    throw temporarilyUnavailable();
+    logger.error(
+      { model, httpStatus: response.status },
+      'Learning assistant returned invalid JSON',
+    );
+    return { failure: 'unavailable' };
   }
 
   type Step = { type?: unknown; content?: unknown };
@@ -129,8 +185,11 @@ export async function askLearningAssistant(
     typeof payload.output_text === 'string' ? payload.output_text : outputParts.join('\n')
   ).trim();
   if (!answer) {
-    logger.error({ httpStatus: response.status }, 'Learning assistant returned an empty response');
-    throw temporarilyUnavailable();
+    logger.error(
+      { model, httpStatus: response.status },
+      'Learning assistant returned an empty response',
+    );
+    return { failure: 'unavailable' };
   }
   return answer;
 }

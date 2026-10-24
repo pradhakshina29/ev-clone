@@ -66,6 +66,7 @@ class _SignUpPageState extends State<SignUpPage> {
                 const ScreenHeader(
                   title: 'Create Your Account',
                   subtitle: 'Join EV Smart Companion',
+                  showLogo: true,
                 ),
                 const SizedBox(height: 34),
                 TextInputField(

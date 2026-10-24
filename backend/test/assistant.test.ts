@@ -78,13 +78,68 @@ describe('learning assistant', () => {
       .send({ message: 'Hello?' });
     expect(response.status).toBe(503);
     expect(response.body.error).toEqual({
-      code: 'assistant_unavailable',
-      message: 'The EV learning assistant is temporarily unavailable.',
+      code: 'assistant_not_configured',
+      message: 'The EV learning assistant is not configured correctly. Please contact support.',
     });
+    // A rejected key fails the same way on every model, so no retry is made.
+    expect(gemini.requests).toHaveLength(1);
     const logged = JSON.stringify(errorSpy.mock.calls);
     expect(logged).toContain('[REDACTED]');
     expect(logged).not.toContain('test-only-gemini-key');
     errorSpy.mockRestore();
+  });
+
+  it('retries an overloaded model once on the fallback model', async () => {
+    const gemini = fakeFetch((_url, init) => {
+      const { model } = JSON.parse(String(init?.body)) as { model: string };
+      return model === 'gemini-flash-latest'
+        ? jsonResponse({ error: { message: 'high demand', code: 'service_unavailable' } }, 503)
+        : geminiAnswer('Fallback answer.');
+    });
+    const response = await request(
+      apiApp({ geminiFetch: gemini.fetch, geminiFallbackModel: 'gemini-flash-lite-latest' }),
+    )
+      .post(ASK)
+      .set(bearer('alice'))
+      .send({ message: 'Hello?' });
+    expect(response.status).toBe(200);
+    expect(response.body.answer).toBe('Fallback answer.');
+    expect(
+      gemini.requests.map((r) => (JSON.parse(String(r.init?.body)) as { model: string }).model),
+    ).toEqual(['gemini-flash-latest', 'gemini-flash-lite-latest']);
+  });
+
+  it('treats a timed-out model as busy and asks the fallback model', async () => {
+    const gemini = fakeFetch((_url, init) => {
+      const { model } = JSON.parse(String(init?.body)) as { model: string };
+      if (model === 'gemini-flash-latest') {
+        throw new DOMException('The operation timed out.', 'TimeoutError');
+      }
+      return geminiAnswer('Answer after timeout.');
+    });
+    const response = await request(
+      apiApp({ geminiFetch: gemini.fetch, geminiFallbackModel: 'gemini-flash-lite-latest' }),
+    )
+      .post(ASK)
+      .set(bearer('alice'))
+      .send({ message: 'Hello?' });
+    expect(response.body.answer).toBe('Answer after timeout.');
+  });
+
+  it('reports busy when every model is overloaded or rate limited', async () => {
+    let calls = 0;
+    const gemini = fakeFetch(() =>
+      jsonResponse({ error: { message: 'slow down' } }, calls++ === 0 ? 503 : 429),
+    );
+    const response = await request(
+      apiApp({ geminiFetch: gemini.fetch, geminiFallbackModel: 'gemini-flash-lite-latest' }),
+    )
+      .post(ASK)
+      .set(bearer('alice'))
+      .send({ message: 'Hello?' });
+    expect(response.status).toBe(503);
+    expect(response.body.error.code).toBe('assistant_busy');
+    expect(gemini.requests).toHaveLength(2);
   });
 
   it('reports network failures and empty output as temporarily unavailable', async () => {

@@ -1,12 +1,15 @@
+import 'dart:math' as math;
+
 import 'package:flutter/material.dart';
 
 import 'app_theme.dart';
 import 'services/api/api_config.dart';
 import 'screens/auth_gate.dart';
+import 'widgets/ev_logo.dart';
 
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
-  warnIfInsecureApiBaseUrl();
+  ensureApiBaseUrlConfigured();
   runApp(const EVSmartCompanionApp());
 }
 
@@ -182,10 +185,11 @@ class _EVHomePageState extends State<EVHomePage> with TickerProviderStateMixin {
                   opacity: logoFade,
                   child: ScaleTransition(
                     scale: logoScale,
-                    child: SizedBox(
-                      width: 340,
-                      height: 340 * 480 / 650,
-                      child: CustomPaint(painter: EVLogoPainter()),
+                    child: EVLogo(
+                      width: math.min(
+                        340,
+                        MediaQuery.sizeOf(context).width - 48,
+                      ),
                     ),
                   ),
                 ),
@@ -241,71 +245,5 @@ class _EVHomePageState extends State<EVHomePage> with TickerProviderStateMixin {
         ),
       ),
     );
-  }
-}
-
-// ================================================================
-// EV LOGO PAINTER
-// ================================================================
-
-class EVLogoPainter extends CustomPainter {
-  @override
-  void paint(Canvas canvas, Size size) {
-    // Preserve the supplied logo's 650 × 480 design geometry.
-    canvas.scale(size.width / 650, size.height / 480);
-
-    final bgPaint = Paint()..color = const Color(0xFF0B1524);
-    canvas.drawCircle(const Offset(325, 232), 232, bgPaint);
-
-    final outline = Paint()
-      ..color = const Color(0xFF5B7FA8)
-      ..style = PaintingStyle.stroke
-      ..strokeWidth = 5
-      ..strokeJoin = StrokeJoin.round
-      ..strokeCap = StrokeCap.round;
-
-    final body = Path()
-      ..moveTo(180, 370)
-      ..cubicTo(120, 320, 108, 260, 108, 200)
-      ..cubicTo(108, 110, 200, 62, 325, 62)
-      ..cubicTo(450, 62, 542, 110, 542, 200)
-      ..cubicTo(542, 260, 530, 320, 468, 370)
-      ..lineTo(468, 402)
-      ..quadraticBezierTo(468, 420, 450, 420)
-      ..lineTo(430, 420)
-      ..quadraticBezierTo(412, 420, 412, 402)
-      ..lineTo(412, 388)
-      ..lineTo(238, 388)
-      ..lineTo(238, 402)
-      ..quadraticBezierTo(238, 420, 220, 420)
-      ..lineTo(200, 420)
-      ..quadraticBezierTo(180, 420, 180, 402)
-      ..close();
-    canvas.drawPath(body, outline);
-
-    canvas.drawCircle(const Offset(200, 332), 22, outline);
-    canvas.drawCircle(const Offset(448, 332), 22, outline);
-
-    final bolt = Path()
-      ..moveTo(358, 118)
-      ..lineTo(273, 247)
-      ..lineTo(322, 247)
-      ..lineTo(289, 348)
-      ..lineTo(388, 217)
-      ..lineTo(340, 217)
-      ..close();
-
-    final boltPaint = Paint()
-      ..shader = const LinearGradient(
-        begin: Alignment.topLeft,
-        end: Alignment.bottomRight,
-        colors: [Color(0xFF3A9AD9), Color(0xFF2DBE8E)],
-      ).createShader(const Rect.fromLTWH(273, 118, 115, 230));
-    canvas.drawPath(bolt, boltPaint);
-  }
-
-  @override
-  bool shouldRepaint(covariant CustomPainter oldDelegate) {
-    return false;
   }
 }

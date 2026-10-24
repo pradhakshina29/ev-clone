@@ -14,6 +14,7 @@ const envSchema = z.object({
   CORS_ORIGINS: required,
   GEMINI_API_KEY: required,
   GEMINI_MODEL: required,
+  GEMINI_FALLBACK_MODEL: z.string().trim().default('gemini-flash-lite-latest'),
   PAYPAL_CLIENT_ID: required,
   PAYPAL_CLIENT_SECRET: required,
   PAYPAL_API_BASE: z.url().refine((value) => value.startsWith('https://'), 'must use https://'),
@@ -21,6 +22,9 @@ const envSchema = z.object({
 });
 
 export const envVariableNames = Object.keys(envSchema.shape) as (keyof typeof envSchema.shape)[];
+
+/** Variables with a built-in default; check-env does not require them. */
+export const optionalEnvVariableNames: readonly string[] = ['GEMINI_FALLBACK_MODEL'];
 
 export type Env = {
   nodeEnv: 'development' | 'test' | 'production';
@@ -31,6 +35,7 @@ export type Env = {
   corsOrigins: string[];
   geminiApiKey: string;
   geminiModel: string;
+  geminiFallbackModel: string;
   paypalClientId: string;
   paypalClientSecret: string;
   paypalApiBase: string;
@@ -65,6 +70,7 @@ export function parseEnv(source: NodeJS.ProcessEnv): EnvResult {
         .filter(Boolean),
       geminiApiKey: value.GEMINI_API_KEY,
       geminiModel: value.GEMINI_MODEL,
+      geminiFallbackModel: value.GEMINI_FALLBACK_MODEL,
       paypalClientId: value.PAYPAL_CLIENT_ID,
       paypalClientSecret: value.PAYPAL_CLIENT_SECRET,
       paypalApiBase: value.PAYPAL_API_BASE.replace(/\/+$/, ''),

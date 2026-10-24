@@ -7,6 +7,7 @@ import 'package:http/http.dart' as http;
 import 'package:latlong2/latlong.dart';
 
 import '../models/charging_station.dart';
+import 'api/api_client.dart';
 
 /// Every public OpenStreetMap (Overpass) server was busy or unreachable.
 class MapServiceBusyException implements Exception {
@@ -19,8 +20,9 @@ class MapServiceBusyException implements Exception {
 }
 
 class ChargingStationService {
-  ChargingStationService({http.Client? client})
-    : _client = client ?? http.Client();
+  ChargingStationService({http.Client? client, ApiClient? api})
+    : _client = client ?? http.Client(),
+      _api = api ?? ApiClient();
 
   // Public Overpass servers that allow browser (CORS) requests. They are
   // often overloaded, so a slow server does not block the others: the next
@@ -38,6 +40,7 @@ class ChargingStationService {
   static const double defaultRouteCorridorWidthKm = 5;
 
   final http.Client _client;
+  final ApiClient _api;
   final Map<String, (DateTime, List<ChargingStation>)> _cache = {};
 
   Future<List<ChargingStation>> findNearbyStations({
@@ -74,12 +77,10 @@ out center tags;
             ..sort((a, b) => a.distanceKm.compareTo(b.distanceKm));
       return List.unmodifiable(refreshedDistances);
     }
-    final response = await _postOverpass(
+    final decoded = await _overpassJson(
       query,
       total: const Duration(seconds: 45),
     );
-
-    final decoded = jsonDecode(response.body);
     if (decoded is! Map<String, dynamic> || decoded['elements'] is! List) {
       throw const FormatException(
         'OpenStreetMap returned invalid station data.',
@@ -148,11 +149,10 @@ out center tags;
 nwr["amenity"="charging_station"](${_bbox(origin, searchRadiusKm)});
 out center tags;
 ''';
-    final response = await _postOverpass(
+    final decoded = await _overpassJson(
       query,
       total: const Duration(seconds: 45),
     );
-    final decoded = jsonDecode(response.body);
     if (decoded is! Map<String, dynamic> || decoded['elements'] is! List) {
       throw const FormatException(
         'OpenStreetMap returned invalid route-corridor data.',
@@ -232,11 +232,10 @@ out center tags;
 $selectors);
 out center tags;
 ''';
-    final response = await _postOverpass(
+    final decoded = await _overpassJson(
       query,
       total: const Duration(seconds: 60),
     );
-    final decoded = jsonDecode(response.body);
     if (decoded is! Map<String, dynamic> || decoded['elements'] is! List) {
       throw const FormatException(
         'OpenStreetMap returned invalid full-route station data.',
@@ -310,6 +309,29 @@ out center tags;
 
   static String _normalizedIdentity(Object? value) =>
       value?.toString().trim().toLowerCase() ?? '';
+
+  /// Decoded Overpass JSON, fetched through our backend first: some phones
+  /// lack the root certificate the public Overpass servers chain to. The
+  /// public servers are still tried directly when the backend is unavailable.
+  Future<Object?> _overpassJson(String query, {required Duration total}) async {
+    final deadline = DateTime.now().add(total);
+    try {
+      return await _api
+          .post('/v1/geo/overpass', {'data': query})
+          .timeout(total);
+    } on ApiException catch (error) {
+      if (error.statusCode == 400) {
+        throw StateError('OpenStreetMap rejected the station search (400).');
+      }
+      debugPrint('Backend station search failed: ${error.code}');
+    } on Exception catch (error) {
+      debugPrint('Backend station search failed: $error');
+    }
+    final remaining = deadline.difference(DateTime.now());
+    if (remaining <= Duration.zero) throw const MapServiceBusyException();
+    final response = await _postOverpass(query, total: remaining);
+    return jsonDecode(response.body);
+  }
 
   /// Posts an Overpass query to the servers in turn, starting the next one
   /// every [_staggerDelay] or as soon as one fails, and returns the first good
@@ -400,7 +422,9 @@ out center tags;
       }
     } on TimeoutException {
       debugPrint('OpenStreetMap server ${endpoint.host} timed out.');
-    } on http.ClientException catch (error) {
+    } on Exception catch (error) {
+      // Includes TLS failures (HandshakeException), so one bad server never
+      // ends the search for the others.
       debugPrint('OpenStreetMap server ${endpoint.host} failed: $error');
     }
     return null;

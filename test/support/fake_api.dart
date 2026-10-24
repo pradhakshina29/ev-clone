@@ -47,6 +47,8 @@ class FakeApi {
         );
       }
       final result = handler(request);
+      // Non-JSON bodies such as PDF bytes.
+      if (result is http.Response) return result;
       if (result is FakeReply) {
         return http.Response(
           result.body == null ? '' : jsonEncode(result.body),

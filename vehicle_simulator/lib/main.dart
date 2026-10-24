@@ -10,6 +10,7 @@ class VehicleSimulatorApp extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) => MaterialApp(
+    debugShowCheckedModeBanner: false,
     title: 'EV Vehicle Simulator',
     theme: ThemeData(
       colorScheme: ColorScheme.fromSeed(seedColor: const Color(0xFF2388D9)),

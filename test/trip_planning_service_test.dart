@@ -12,6 +12,8 @@ import 'package:http/http.dart' as http;
 import 'package:http/testing.dart';
 import 'package:latlong2/latlong.dart';
 
+import 'support/fake_api.dart';
+
 void main() {
   const feasibility = TripFeasibilityService();
 
@@ -258,8 +260,14 @@ void main() {
       return http.Response('Unexpected request: ${request.url}', 500);
     });
     addTearDown(client.close);
-    final directions = RoadDirectionsService(client: client);
-    final stations = ChargingStationService(client: client);
+    final directions = RoadDirectionsService(
+      client: client,
+      api: FakeApi().client(),
+    );
+    final stations = ChargingStationService(
+      client: client,
+      api: FakeApi().client(),
+    );
     final planner = TripPlanningService(
       directions: directions,
       stations: stations,
@@ -332,8 +340,14 @@ void main() {
         fail('Unexpected provider request: ${request.url}');
       });
       addTearDown(client.close);
-      final directions = RoadDirectionsService(client: client);
-      final stations = ChargingStationService(client: client);
+      final directions = RoadDirectionsService(
+        client: client,
+        api: FakeApi().client(),
+      );
+      final stations = ChargingStationService(
+        client: client,
+        api: FakeApi().client(),
+      );
       final planner = TripPlanningService(
         directions: directions,
         stations: stations,

@@ -5,13 +5,16 @@ import 'package:http/http.dart' as http;
 import 'package:latlong2/latlong.dart';
 
 import '../models/road_route.dart';
+import 'api/api_client.dart';
 
 class RoadDirectionsService {
-  RoadDirectionsService({http.Client? client})
+  RoadDirectionsService({http.Client? client, ApiClient? api})
     : _client = client ?? http.Client(),
+      _api = api ?? ApiClient(),
       _ownsClient = client == null;
 
   final http.Client _client;
+  final ApiClient _api;
   final bool _ownsClient;
   final Map<String, GeocodedDestination> _destinationCache = {};
   final Map<String, RoadRoute> _routeCache = {};
@@ -83,17 +86,17 @@ class RoadDirectionsService {
         final value = values[key]?.toString().trim();
         if (value != null && value.isNotEmpty) components[key] = value;
       }
-      final name =       components['name'] ??
-      components['street'] ??
-      components['city'] ??
-      components['district'] ??
-      components['county'] ??
-      components['state'];
+      final name =
+          components['name'] ??
+          components['street'] ??
+          components['city'] ??
+          components['district'] ??
+          components['county'] ??
+          components['state'];
       if (name == null) continue;
       final displayName = _joinPlaceParts([
         components['name'],
-        if (components['housenumber'] != null ||
-            components['street'] != null)
+        if (components['housenumber'] != null || components['street'] != null)
           [
             components['housenumber'],
             components['street'],
@@ -156,7 +159,9 @@ class RoadDirectionsService {
         !longitude.isFinite ||
         displayName == null ||
         displayName.isEmpty) {
-      throw const FormatException('Destination result had invalid coordinates.');
+      throw const FormatException(
+        'Destination result had invalid coordinates.',
+      );
     }
     final destination = GeocodedDestination(
       name: result['name']?.toString().trim().isNotEmpty == true
@@ -170,9 +175,7 @@ class RoadDirectionsService {
           ? Map.unmodifiable(
               Map<String, dynamic>.from(
                 result['address'] as Map,
-              ).map(
-                (key, value) => MapEntry(key, value.toString()),
-              ),
+              ).map((key, value) => MapEntry(key, value.toString())),
             )
           : const {},
     );
@@ -193,16 +196,7 @@ class RoadDirectionsService {
     final cached = _routeCache[cacheKey];
     if (cached != null) return cached;
 
-    final coordinates =
-        '${origin.longitude},${origin.latitude};'
-        '${destination.location.longitude},${destination.location.latitude}';
-    final uri = Uri.https(
-      'router.project-osrm.org',
-      '/route/v1/driving/$coordinates',
-      {'overview': 'full', 'geometries': 'geojson', 'steps': 'false'},
-    );
-    final response = await _request(uri);
-    final decoded = jsonDecode(response.body);
+    final decoded = await _routeJson(origin, destination.location);
     if (decoded is! Map<String, dynamic> ||
         decoded['code'] != 'Ok' ||
         decoded['routes'] is! List ||
@@ -215,7 +209,9 @@ class RoadDirectionsService {
     final geometry = route['geometry'];
     final rawCoordinates = geometry is Map ? geometry['coordinates'] : null;
     if (rawCoordinates is! List || rawCoordinates.length < 2) {
-      throw const FormatException('Routing service returned no route geometry.');
+      throw const FormatException(
+        'Routing service returned no route geometry.',
+      );
     }
     final points = <LatLng>[];
     for (final coordinate in rawCoordinates) {
@@ -232,7 +228,9 @@ class RoadDirectionsService {
         durationSeconds == null ||
         distanceMeters < 0 ||
         durationSeconds < 0) {
-      throw const FormatException('Routing service returned invalid route data.');
+      throw const FormatException(
+        'Routing service returned invalid route data.',
+      );
     }
 
     final result = RoadRoute(
@@ -243,6 +241,37 @@ class RoadDirectionsService {
     );
     _routeCache[cacheKey] = result;
     return result;
+  }
+
+  /// OSRM's route JSON, fetched through our backend first: some phones lack
+  /// the root certificate router.project-osrm.org chains to. OSRM is still
+  /// called directly when the backend is unavailable.
+  Future<Object?> _routeJson(LatLng origin, LatLng destination) async {
+    try {
+      return await _api
+          .get(
+            '/v1/geo/route',
+            query: {
+              'fromLat': '${origin.latitude}',
+              'fromLon': '${origin.longitude}',
+              'toLat': '${destination.latitude}',
+              'toLon': '${destination.longitude}',
+            },
+          )
+          .timeout(const Duration(seconds: 60));
+    } on Exception catch (error) {
+      debugPrint('Backend route request failed, trying OSRM directly: $error');
+    }
+    final coordinates =
+        '${origin.longitude},${origin.latitude};'
+        '${destination.longitude},${destination.latitude}';
+    final uri = Uri.https(
+      'router.project-osrm.org',
+      '/route/v1/driving/$coordinates',
+      {'overview': 'full', 'geometries': 'geojson', 'steps': 'false'},
+    );
+    final response = await _request(uri);
+    return jsonDecode(response.body);
   }
 
   Future<http.Response> _request(

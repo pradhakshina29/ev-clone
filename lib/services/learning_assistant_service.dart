@@ -75,7 +75,11 @@ class ApiLearningAssistantService implements EvLearningAssistant {
       if (error.statusCode == 400 || error.statusCode == 429) {
         throw LearningAssistantException(error.message);
       }
-      if (error.statusCode == 0) throw LearningAssistantException(error.message);
+      if (error.statusCode == 0 ||
+          error.code == 'assistant_busy' ||
+          error.code == 'assistant_not_configured') {
+        throw LearningAssistantException(error.message);
+      }
       throw const LearningAssistantException(
         'AI assistant is temporarily unavailable. Please try again.',
       );

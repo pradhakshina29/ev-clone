@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import '../app_theme.dart';
+import 'ev_logo.dart';
 
 class PrimaryButton extends StatelessWidget {
   const PrimaryButton({
@@ -60,11 +61,13 @@ class ScreenHeader extends StatelessWidget {
     required this.title,
     this.subtitle,
     this.showBack = true,
+    this.showLogo = false,
   });
 
   final String title;
   final String? subtitle;
   final bool showBack;
+  final bool showLogo;
 
   @override
   Widget build(BuildContext context) {
@@ -81,6 +84,7 @@ class ScreenHeader extends StatelessWidget {
               constraints: const BoxConstraints(),
             ),
           ),
+        if (showLogo) ...[const SizedBox(height: 8), const AppLogo(size: 64)],
         const SizedBox(height: 20),
         Text(
           title,
@@ -257,17 +261,7 @@ class AppLogo extends StatelessWidget {
   final double size;
 
   @override
-  Widget build(BuildContext context) {
-    return Container(
-      width: size,
-      height: size,
-      decoration: const BoxDecoration(
-        color: AppTheme.navy,
-        shape: BoxShape.circle,
-      ),
-      child: Icon(Icons.bolt, color: const Color(0xFF35A9E1), size: size * .55),
-    );
-  }
+  Widget build(BuildContext context) => EVLogoMark(size: size);
 }
 
 class VehicleCard extends StatelessWidget {

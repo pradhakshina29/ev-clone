@@ -17,6 +17,10 @@ from the BLE simulator.
 2. `cd backend` then `npm install`.
 3. Copy `.env.example` to `.env` and fill in every `REPLACE_ME`. Never commit `.env`.
 4. `npm run check-env` prints `present` or `missing` for each variable (never the values).
+   `GEMINI_FALLBACK_MODEL` is optional (default `gemini-flash-lite-latest`): the
+   learning assistant asks it once when `GEMINI_MODEL` is overloaded (503),
+   rate limited (429) or times out. Both must be Gemini models available to
+   your key.
 
 ## Commands
 
@@ -36,6 +40,15 @@ from the BLE simulator.
 `GET /health` returns `{"status":"ok"}` without auth or database access. Every
 route under `/v1` except `/v1/auth/signup`, `/login`, `/refresh` and `/logout`
 requires a valid access token. Changing `JWT_SECRET` signs everyone out.
+
+Map proxy (`/v1/geo/route`, `/v1/geo/overpass`): OSRM and the public Overpass
+servers chain to the ISRG Root X2 certificate, which Android only trusts from
+Android 14, so phones on older Android cannot call them directly. The app
+fetches routes and charging stations through these endpoints (30 requests per
+minute per user) and falls back to the public servers only if the backend is
+unreachable.
+
+Payment receipts: see `docs/paypal-checkout.md`.
 
 ## Troubleshooting
 

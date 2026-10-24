@@ -4,9 +4,13 @@
 
 list(APPEND FLUTTER_PLUGIN_LIST
   bluetooth_low_energy_windows
+  desktop_webview_window
   file_selector_windows
+  flutter_secure_storage_windows
   geolocator_windows
+  share_plus
   url_launcher_windows
+  window_to_front
 )
 
 list(APPEND FLUTTER_FFI_PLUGIN_LIST

@@ -34,7 +34,8 @@ class ApiClient {
     http.Client? httpClient,
     IdTokenProvider? tokenProvider,
     String? baseUrl,
-    this.timeout = const Duration(seconds: 20),
+    // Long enough for a free Render instance to wake from sleep.
+    this.timeout = const Duration(seconds: 60),
   }) : _http = httpClient ?? http.Client(),
        _tokenProvider = tokenProvider ?? _sessionAccessToken,
        _baseUrl = (baseUrl ?? apiBaseUrl).replaceFirst(RegExp(r'/+$'), '');

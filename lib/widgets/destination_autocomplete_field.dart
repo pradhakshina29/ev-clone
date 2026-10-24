@@ -15,6 +15,9 @@ class DestinationAutocompleteField extends StatefulWidget {
     required this.onPlaceSelected,
     this.debounceDuration = const Duration(milliseconds: 400),
     this.minimumQueryLength = 3,
+    this.labelText = 'Destination',
+    this.hintText = 'Enter a city, address or place',
+    this.prefixIcon = Icons.flag_outlined,
   });
 
   final PlaceSearch searchPlaces;
@@ -22,6 +25,9 @@ class DestinationAutocompleteField extends StatefulWidget {
   final ValueChanged<GeocodedDestination?> onPlaceSelected;
   final Duration debounceDuration;
   final int minimumQueryLength;
+  final String labelText;
+  final String hintText;
+  final IconData prefixIcon;
 
   @override
   State<DestinationAutocompleteField> createState() =>
@@ -164,9 +170,9 @@ class _DestinationAutocompleteFieldState
           onChanged: _handleChanged,
           textInputAction: TextInputAction.search,
           decoration: InputDecoration(
-            labelText: 'Destination',
-            hintText: 'Enter a city, address or place',
-            prefixIcon: const Icon(Icons.flag_outlined),
+            labelText: widget.labelText,
+            hintText: widget.hintText,
+            prefixIcon: Icon(widget.prefixIcon),
             suffixIcon: _loading
                 ? const Padding(
                     padding: EdgeInsets.all(14),
@@ -178,7 +184,7 @@ class _DestinationAutocompleteFieldState
                   )
                 : _controller.text.isNotEmpty
                 ? IconButton(
-                    tooltip: 'Clear destination',
+                    tooltip: 'Clear ${widget.labelText.toLowerCase()}',
                     onPressed: () {
                       _controller.clear();
                       _handleChanged('');

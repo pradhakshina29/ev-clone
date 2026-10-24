@@ -1,6 +1,7 @@
 import { Router } from 'express';
 import { z } from 'zod';
 
+import { logger } from '../logger.js';
 import { currentUser } from '../middleware/auth.js';
 import { validate, validBody, validParams, validQuery } from '../middleware/validate.js';
 import { maskedCardNumberPattern, paiseToRupees } from '../models/common.js';
@@ -11,6 +12,7 @@ import {
   registerCard,
   updateCard,
 } from '../services/cards.js';
+import { ensureInvoice, invoiceJson, renderInvoicePdf } from '../services/invoices.js';
 import {
   captureRechargeOrder,
   createRechargeOrder,
@@ -52,6 +54,9 @@ const transactionsQuery = z.object({
 const createOrderSchema = z.object({ amountInr: z.number() });
 const orderParams = vehicleIdParams.extend({
   orderId: z.string().regex(/^[A-Za-z0-9_-]{1,128}$/, 'Invalid PayPal order ID.'),
+});
+const transactionParams = vehicleIdParams.extend({
+  transactionId: z.string().regex(/^[a-f0-9]{24}$/, 'Invalid transaction ID.'),
 });
 const sessionParams = z.object({
   sessionId: z.string().regex(/^[A-Za-z0-9_-]{1,128}$/, 'Invalid charging-session ID.'),
@@ -102,6 +107,36 @@ export function chargingCardRouter(paypal: PayPalConfig) {
     },
   );
 
+  // Creates the receipt on first request (also the retry path when creating it
+  // right after capture failed). Never touches the payment itself.
+  router.get(
+    `${base}/transactions/:transactionId/invoice`,
+    validate({ params: transactionParams }),
+    async (req, res) => {
+      const { vehicleId, transactionId } = validParams(req, transactionParams);
+      const invoice = await ensureInvoice(currentUser(req).uid, vehicleId, transactionId);
+      res.json({ invoice: invoiceJson(invoice) });
+    },
+  );
+
+  router.get(
+    `${base}/transactions/:transactionId/invoice.pdf`,
+    validate({ params: transactionParams }),
+    async (req, res) => {
+      const { vehicleId, transactionId } = validParams(req, transactionParams);
+      const invoice = await ensureInvoice(currentUser(req).uid, vehicleId, transactionId);
+      const pdf = await renderInvoicePdf(invoice);
+      res
+        .status(200)
+        .set({
+          'Content-Type': 'application/pdf',
+          'Content-Disposition': `attachment; filename="${invoice.invoiceNumber}.pdf"`,
+          'Cache-Control': 'private, no-store',
+        })
+        .send(pdf);
+    },
+  );
+
   router.post(
     `${base}/paypal-orders`,
     validate({ params: vehicleIdParams, body: createOrderSchema }),
@@ -119,7 +154,22 @@ export function chargingCardRouter(paypal: PayPalConfig) {
     validate({ params: orderParams }),
     async (req, res) => {
       const { vehicleId, orderId } = validParams(req, orderParams);
-      res.json(await captureRechargeOrder(paypal, currentUser(req).uid, vehicleId, orderId));
+      const uid = currentUser(req).uid;
+      const result = await captureRechargeOrder(paypal, uid, vehicleId, orderId);
+      // The payment is already credited; a receipt failure must not fail
+      // this response (the app retries through the invoice endpoint).
+      let invoiceNumber: string | null = null;
+      if (result.transactionId) {
+        try {
+          invoiceNumber = (await ensureInvoice(uid, vehicleId, result.transactionId)).invoiceNumber;
+        } catch (error) {
+          logger.error(
+            { errorName: error instanceof Error ? error.name : 'Error' },
+            'Could not create the recharge receipt',
+          );
+        }
+      }
+      res.json({ ...result, invoiceNumber });
     },
   );
 

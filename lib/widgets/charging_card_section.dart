@@ -10,6 +10,7 @@ import '../models/charging_card.dart';
 import '../models/vehicle.dart';
 import '../services/api/api_client.dart';
 import '../services/data_service.dart';
+import '../services/invoice_file_service.dart';
 import '../services/paypal_web_checkout_bridge.dart';
 
 class ChargingCardSection extends StatelessWidget {
@@ -778,6 +779,7 @@ class _RechargeDialogState extends State<_RechargeDialog> {
   String? _approvalUrl;
   bool _success = false;
   double? _balanceAfter;
+  String? _rechargeTransactionId;
   double? _paypalAmount;
   String? _paypalClientId;
   String? _statusMessage;
@@ -988,6 +990,7 @@ class _RechargeDialogState extends State<_RechargeDialog> {
         orderId: approvedOrderId ?? orderId,
       );
       final balanceAfter = _verifiedBalanceAfter(capture);
+      final transactionId = capture['transactionId'];
       if (_awaitingWebCapture) {
         finishPayPalWebCheckoutCapture(success: true);
         _awaitingWebCapture = false;
@@ -995,6 +998,7 @@ class _RechargeDialogState extends State<_RechargeDialog> {
       setState(() {
         _success = true;
         _balanceAfter = balanceAfter;
+        _rechargeTransactionId = transactionId is String ? transactionId : null;
         _processing = false;
         _statusMessage = 'Payment successful.';
       });
@@ -1063,6 +1067,14 @@ class _RechargeDialogState extends State<_RechargeDialog> {
                         'INR',
                       ),
                     ),
+                    if (_rechargeTransactionId case final transactionId?) ...[
+                      const SizedBox(height: 12),
+                      InvoiceDownloadButton(
+                        dataService: widget.dataService,
+                        vehicleId: widget.vehicle.id,
+                        transactionId: transactionId,
+                      ),
+                    ],
                     const SizedBox(height: 12),
                     FilledButton(
                       onPressed: () => Navigator.of(context).pop(),
@@ -1339,7 +1351,10 @@ class _RecentTransactionSummary extends StatelessWidget {
           );
         }
         final transaction = transactions.first;
-        return _TransactionTile(transaction: transaction);
+        return _TransactionTile(
+          transaction: transaction,
+          dataService: dataService,
+        );
       },
     );
   }
@@ -1621,8 +1636,10 @@ class _TransactionHistory extends StatelessWidget {
                 return ListView.separated(
                   itemCount: transactions.length,
                   separatorBuilder: (_, _) => const Divider(height: 1),
-                  itemBuilder: (context, index) =>
-                      _TransactionTile(transaction: transactions[index]),
+                  itemBuilder: (context, index) => _TransactionTile(
+                    transaction: transactions[index],
+                    dataService: dataService,
+                  ),
                 );
               },
             ),
@@ -1634,9 +1651,10 @@ class _TransactionHistory extends StatelessWidget {
 }
 
 class _TransactionTile extends StatelessWidget {
-  const _TransactionTile({required this.transaction});
+  const _TransactionTile({required this.transaction, this.dataService});
 
   final ChargingTransaction transaction;
+  final DataService? dataService;
 
   @override
   Widget build(BuildContext context) {
@@ -1692,7 +1710,23 @@ class _TransactionTile extends StatelessWidget {
       ),
       subtitle: Padding(
         padding: const EdgeInsets.only(top: 5),
-        child: Text(details.join('\n')),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text(details.join('\n')),
+            // Receipts exist only for PayPal recharges verified by the backend.
+            if (isCredit &&
+                transaction.paypalCaptureId != null &&
+                transaction.vehicleId != null &&
+                dataService != null)
+              InvoiceDownloadButton(
+                dataService: dataService!,
+                vehicleId: transaction.vehicleId!,
+                transactionId: transaction.id,
+                compact: true,
+              ),
+          ],
+        ),
       ),
       isThreeLine: true,
       trailing: Column(
@@ -1715,6 +1749,91 @@ class _TransactionTile extends StatelessWidget {
           Text(transaction.status ?? 'Not available'),
         ],
       ),
+    );
+  }
+}
+
+/// Downloads the payment receipt of a verified recharge.
+class InvoiceDownloadButton extends StatefulWidget {
+  const InvoiceDownloadButton({
+    super.key,
+    required this.dataService,
+    required this.vehicleId,
+    required this.transactionId,
+    this.compact = false,
+    this.saver = saveInvoicePdf,
+  });
+
+  final DataService dataService;
+  final String vehicleId;
+  final String transactionId;
+  final bool compact;
+  final InvoiceSaver saver;
+
+  @override
+  State<InvoiceDownloadButton> createState() => _InvoiceDownloadButtonState();
+}
+
+class _InvoiceDownloadButtonState extends State<InvoiceDownloadButton> {
+  bool _loading = false;
+  String? _error;
+
+  Future<void> _download() async {
+    setState(() {
+      _loading = true;
+      _error = null;
+    });
+    try {
+      final (fileName, bytes) = await widget.dataService
+          .downloadRechargeInvoice(
+            vehicleId: widget.vehicleId,
+            transactionId: widget.transactionId,
+          );
+      await widget.saver(bytes, fileName);
+      if (mounted) setState(() => _loading = false);
+    } catch (error) {
+      debugPrint('Receipt download failed: $error');
+      if (!mounted) return;
+      setState(() {
+        _loading = false;
+        _error = error is ApiException
+            ? error.message
+            : 'The receipt could not be saved. Please try again.';
+      });
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final icon = _loading
+        ? const SizedBox(
+            width: 16,
+            height: 16,
+            child: CircularProgressIndicator(strokeWidth: 2),
+          )
+        : const Icon(Icons.picture_as_pdf_outlined, size: 18);
+    final label = Text(_loading ? 'Preparing receipt…' : 'Download invoice');
+    final onPressed = _loading ? null : _download;
+    return Column(
+      mainAxisSize: MainAxisSize.min,
+      crossAxisAlignment: widget.compact
+          ? CrossAxisAlignment.start
+          : CrossAxisAlignment.stretch,
+      children: [
+        if (widget.compact)
+          TextButton.icon(onPressed: onPressed, icon: icon, label: label)
+        else
+          OutlinedButton.icon(onPressed: onPressed, icon: icon, label: label),
+        if (_error != null)
+          Text(
+            _error!,
+            textAlign: widget.compact ? TextAlign.start : TextAlign.center,
+            style: TextStyle(
+              color: Theme.of(context).colorScheme.error,
+              fontSize: 12,
+            ),
+          ),
+      ],
     );
   }
 }

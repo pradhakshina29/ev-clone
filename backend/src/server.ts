@@ -27,7 +27,13 @@ const app = createApp({
       demoExchangeRateInrToUsd: env.demoExchangeRateInrToUsd,
       fetch,
     },
-    assistant: { apiKey: env.geminiApiKey, model: env.geminiModel, fetch },
+    assistant: {
+      apiKey: env.geminiApiKey,
+      model: env.geminiModel,
+      fallbackModel: env.geminiFallbackModel,
+      fetch,
+    },
+    geo: { fetch },
   }),
 });
 
