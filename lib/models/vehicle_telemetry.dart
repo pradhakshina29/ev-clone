@@ -1,3 +1,5 @@
+import 'package:vehicle_ble_protocol/vehicle_ble_protocol.dart';
+
 class VehicleData {
   const VehicleData({
     required this.battery,
@@ -46,6 +48,13 @@ class VehicleData {
     this.lastTripDistanceKm,
     this.lastTripEnergyKwh,
     this.odometerKm,
+    this.batteryVoltageV,
+    this.motorStatus,
+    this.tireTreadFlPercent,
+    this.tireTreadFrPercent,
+    this.tireTreadRlPercent,
+    this.tireTreadRrPercent,
+    this.softwareUpdateAvailable,
   });
 
   final double battery;
@@ -95,6 +104,69 @@ class VehicleData {
   final double? lastTripDistanceKm;
   final double? lastTripEnergyKwh;
   final double? odometerKm;
+  final double? batteryVoltageV;
+  final String? motorStatus;
+  final double? tireTreadFlPercent;
+  final double? tireTreadFrPercent;
+  final double? tireTreadRlPercent;
+  final double? tireTreadRrPercent;
+  final bool? softwareUpdateAvailable;
+
+  /// Live values from a BLE snapshot. Returns null when the snapshot has no
+  /// health section, so every health field stays "Not reported". Only fields
+  /// the simulator sends are filled; the rest stay null.
+  static VehicleData? fromSnapshot(VehicleStateSnapshot? snapshot) {
+    final state = snapshot?.state;
+    final health = state?.health;
+    if (state == null || health == null) return null;
+    final brakes = health.brakes;
+    final software = health.software;
+    return VehicleData(
+      battery: state.batteryPercent,
+      range: state.rangeKm,
+      batteryHealth: health.battery.stateOfHealthPercent,
+      healthScore: 0,
+      isCharging: state.chargingConnected,
+      updatedAt: DateTime.fromMillisecondsSinceEpoch(snapshot!.timestampMillis),
+      batteryTemperatureC: health.battery.temperatureC,
+      batteryCapacityKwh: health.battery.capacityKwh,
+      batteryAgeMonths: health.battery.ageMonths,
+      chargingCycles: health.battery.chargeCycles,
+      batteryVoltageV: health.battery.voltageV,
+      motorHealth: health.motor.healthPercent,
+      motorTemperatureC: health.motor.temperatureC,
+      motorEfficiencyPercent: health.motor.efficiencyPercent,
+      motorRpm: health.motor.rpm,
+      motorStatus: switch (health.motor.status) {
+        MotorOperatingStatus.off => 'Off',
+        MotorOperatingStatus.idle => 'Idle',
+        MotorOperatingStatus.running => 'Running',
+        MotorOperatingStatus.overheating => 'Overheating',
+      },
+      tirePressureFlPsi: health.tire(VehicleDoor.frontLeft).pressurePsi,
+      tirePressureFrPsi: health.tire(VehicleDoor.frontRight).pressurePsi,
+      tirePressureRlPsi: health.tire(VehicleDoor.rearLeft).pressurePsi,
+      tirePressureRrPsi: health.tire(VehicleDoor.rearRight).pressurePsi,
+      tireTreadFlPercent: health.tire(VehicleDoor.frontLeft).treadPercent,
+      tireTreadFrPercent: health.tire(VehicleDoor.frontRight).treadPercent,
+      tireTreadRlPercent: health.tire(VehicleDoor.rearLeft).treadPercent,
+      tireTreadRrPercent: health.tire(VehicleDoor.rearRight).treadPercent,
+      frontBrakePadLifePercent: brakes.frontPadPercent,
+      rearBrakePadLifePercent: brakes.rearPadPercent,
+      // The brake score is the more worn of the two pad sets.
+      brakeHealth: brakes.frontPadPercent < brakes.rearPadPercent
+          ? brakes.frontPadPercent
+          : brakes.rearPadPercent,
+      brakeFluidStatus: switch (brakes.fluidStatus) {
+        BrakeFluidStatus.ok => 'OK',
+        BrakeFluidStatus.low => 'Low',
+        BrakeFluidStatus.replace => 'Replace',
+      },
+      vehicleSoftwareVersion: software.version,
+      softwareUpdateAvailable: software.updateAvailable,
+      odometerKm: health.odometerKm,
+    );
+  }
 
   factory VehicleData.fromMap(Map<String, dynamic> map) {
     return VehicleData(

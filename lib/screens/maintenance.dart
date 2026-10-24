@@ -357,14 +357,17 @@ class _MaintenancePageState extends State<MaintenancePage> {
                 final matchingSnapshot = snapshot?.vehicleId == vehicle.id
                     ? snapshot
                     : null;
-                const VehicleData? telemetry = null;
+                final telemetry = VehicleData.fromSnapshot(matchingSnapshot);
                 return RefreshIndicator(
                   onRefresh: _data.refresh,
                   child: ListView(
                     physics: const AlwaysScrollableScrollPhysics(),
                     padding: const EdgeInsets.fromLTRB(18, 14, 18, 100),
                     children: [
-                      _VehicleHeader(vehicle: vehicle, odometerKm: null),
+                      _VehicleHeader(
+                        vehicle: vehicle,
+                        odometerKm: telemetry?.odometerKm,
+                      ),
                       const SizedBox(height: 14),
                       _LiveTelemetrySummary(snapshot: matchingSnapshot),
                       const SizedBox(height: 14),
@@ -379,7 +382,10 @@ class _MaintenancePageState extends State<MaintenancePage> {
                       const SizedBox(height: 10),
                       _SignalAlerts(telemetry: telemetry),
                       const SizedBox(height: 22),
-                      _CostSummary(records: records, odometerKm: null),
+                      _CostSummary(
+                        records: records,
+                        odometerKm: telemetry?.odometerKm,
+                      ),
                       const SizedBox(height: 22),
                       _SectionHeading(
                         title: 'Service history',
@@ -652,11 +658,30 @@ class _SignalAlerts extends StatelessWidget {
       if (telemetry!.tirePressureRrPsi != null)
         ('Rear right tire', telemetry!.tirePressureRrPsi!),
     ];
-    final lowPressure = signals.where((signal) => signal.$2 < 32).toList();
-    final hotBattery =
-        telemetry!.batteryTemperatureC != null &&
-        telemetry!.batteryTemperatureC! >= 50;
-    if (lowPressure.isEmpty && !hotBattery) {
+    bool needsAttention(VehicleHealthStatus status) =>
+        status == VehicleHealthStatus.attention ||
+        status == VehicleHealthStatus.critical;
+    final lowPressure = signals
+        .where(
+          (signal) =>
+              needsAttention(HealthThresholds.tirePressure(signal.$2)),
+        )
+        .toList();
+    final batteryStatus = HealthThresholds.batteryTemperature(
+      telemetry!.batteryTemperatureC,
+    );
+    final hotBattery = needsAttention(batteryStatus);
+    final motorStatus = HealthThresholds.motorTemperature(
+      telemetry!.motorTemperatureC,
+    );
+    final hotMotor = needsAttention(motorStatus);
+    final pads = <(String, double)>[
+      if (telemetry!.frontBrakePadLifePercent != null)
+        ('Front', telemetry!.frontBrakePadLifePercent!),
+      if (telemetry!.rearBrakePadLifePercent != null)
+        ('Rear', telemetry!.rearBrakePadLifePercent!),
+    ].where((pad) => needsAttention(HealthThresholds.brakePad(pad.$2))).toList();
+    if (lowPressure.isEmpty && !hotBattery && !hotMotor && pads.isEmpty) {
       return const _NoticeCard(
         icon: Icons.check_circle_outline,
         text:
@@ -672,7 +697,9 @@ class _SignalAlerts extends StatelessWidget {
             message:
                 '${signal.$1}: ${signal.$2.toStringAsFixed(0)} PSI. Check the vehicle placard for the correct pressure.',
             icon: Icons.tire_repair_rounded,
-            critical: signal.$2 < 28,
+            critical:
+                HealthThresholds.tirePressure(signal.$2) ==
+                VehicleHealthStatus.critical,
           ),
         if (hotBattery)
           _AlertCard(
@@ -680,7 +707,25 @@ class _SignalAlerts extends StatelessWidget {
             message:
                 'Reported battery temperature is ${telemetry!.batteryTemperatureC!.toStringAsFixed(0)}°C. Follow the vehicle guidance and contact qualified service if it persists.',
             icon: Icons.thermostat_rounded,
-            critical: false,
+            critical: batteryStatus == VehicleHealthStatus.critical,
+          ),
+        if (hotMotor)
+          _AlertCard(
+            title: 'Motor temperature is elevated',
+            message:
+                'Reported motor temperature is ${telemetry!.motorTemperatureC!.toStringAsFixed(0)}°C. Drive gently and stop safely if it keeps rising.',
+            icon: Icons.settings_input_component_rounded,
+            critical: motorStatus == VehicleHealthStatus.critical,
+          ),
+        for (final pad in pads)
+          _AlertCard(
+            title: 'Brake pads are worn',
+            message:
+                '${pad.$1} pad life is ${pad.$2.toStringAsFixed(0)}%. Arrange a brake service.',
+            icon: Icons.disc_full_rounded,
+            critical:
+                HealthThresholds.brakePad(pad.$2) ==
+                VehicleHealthStatus.critical,
           ),
         const SizedBox(height: 5),
         const Align(

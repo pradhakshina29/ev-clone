@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_application_2/models/vehicle.dart';
 import 'package:flutter_application_2/screens/vehicle_health_page.dart';
 import 'package:flutter_application_2/services/vehicle_ble_client.dart';
+import 'package:flutter_application_2/services/vehicle_health_history.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:vehicle_ble_protocol/vehicle_ble_protocol.dart';
 
@@ -90,6 +91,108 @@ void main() {
     expect(find.text('42%'), findsWidgets);
     expect(find.text('72%'), findsNothing);
     expect(find.text('Charging cycles'), findsOneWidget);
+    expect(tester.takeException(), isNull);
+  });
+
+  testWidgets('shows live health values, updates them and clears them', (
+    tester,
+  ) async {
+    final ble = VehicleBleClient.shared;
+    addTearDown(() => ble.snapshot.value = null);
+    final history = VehicleHealthHistory(
+      snapshots: ble.snapshot,
+      interval: Duration.zero,
+    )..start();
+    addTearDown(history.dispose);
+    tester.view.physicalSize = const Size(1280, 900);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(tester.view.resetPhysicalSize);
+    addTearDown(tester.view.resetDevicePixelRatio);
+
+    const vehicle = Vehicle(
+      id: 'EV001',
+      model: 'EV Smart X1',
+      registrationNumber: 'TN01AB1234',
+      ownerName: 'Driver',
+      vin: 'EVVIN001',
+    );
+    final api = FakeApi()
+      ..on(
+        'GET /v1/vehicles/${vehicle.id}/maintenance',
+        (_) => {'records': <Object>[]},
+      );
+    VehicleStateSnapshot live(int sequence, VehicleHealthState health) =>
+        VehicleStateSnapshot(
+          vehicleId: vehicle.id,
+          sequence: sequence,
+          timestampMillis: sequence * 1000,
+          state: VehicleControlState(
+            batteryPercent: 64,
+            rangeKm: 224,
+            health: health,
+          ),
+        );
+    ble.snapshot.value = live(1, const VehicleHealthState());
+
+    await tester.pumpWidget(
+      MaterialApp(
+        theme: ThemeData(platform: TargetPlatform.windows),
+        home: VehicleHealthPage(
+          vehicle: vehicle,
+          dataService: api.dataService(),
+          healthHistory: history,
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    expect(find.text('GOOD HEALTH'), findsOneWidget);
+    expect(find.text('Battery · GOOD'), findsOneWidget);
+    expect(find.text('v4.2.1'), findsWidgets);
+    expect(find.text('397.5 V'), findsOneWidget);
+    expect(find.text('312'), findsWidgets);
+    expect(find.text('2 years 2 months'), findsOneWidget);
+    expect(find.text('Off'), findsWidgets);
+    expect(find.text('Up to date'), findsWidgets);
+    expect(find.textContaining('35.0 PSI'), findsWidgets);
+    expect(find.textContaining('1 readings this session'), findsOneWidget);
+    expect(
+      find.textContaining('Battery health history is not available yet.'),
+      findsNothing,
+    );
+
+    ble.snapshot.value = live(
+      2,
+      const VehicleHealthState(
+        motor: MotorHealthState(
+          temperatureC: 112,
+          rpm: 4200,
+          status: MotorOperatingStatus.overheating,
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+    expect(find.text('REQUIRES SERVICE'), findsOneWidget);
+    expect(find.text('Motor · CRITICAL'), findsOneWidget);
+    expect(find.text('112°C'), findsWidgets);
+    expect(find.text('4200 rpm'), findsOneWidget);
+    expect(find.text('Overheating'), findsOneWidget);
+    expect(find.textContaining('2 readings this session'), findsOneWidget);
+
+    final motorCard = find.text('Motor · CRITICAL');
+    await tester.ensureVisible(motorCard);
+    await tester.tap(motorCard);
+    await tester.pumpAndSettle();
+    expect(find.text('CRITICAL'), findsWidgets);
+    expect(find.text('Arrange a professional service inspection.'), findsOneWidget);
+    await tester.tapAt(const Offset(10, 10));
+    await tester.pumpAndSettle();
+
+    ble.snapshot.value = null;
+    await tester.pumpAndSettle();
+    expect(find.text('STATUS UNAVAILABLE'), findsOneWidget);
+    expect(find.text('Not reported'), findsWidgets);
+    expect(find.text('112°C'), findsNothing);
     expect(tester.takeException(), isNull);
   });
 

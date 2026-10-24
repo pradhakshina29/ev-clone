@@ -11,6 +11,7 @@ import '../services/api/api_client.dart';
 import '../services/data_service.dart';
 import '../services/vehicle_ble_client.dart';
 import '../services/vehicle_controls_preferences_error.dart';
+import '../services/vehicle_controls_preferences_store.dart';
 
 class VehicleControlsPage extends StatefulWidget {
   const VehicleControlsPage({
@@ -18,10 +19,14 @@ class VehicleControlsPage extends StatefulWidget {
     required this.vehicle,
     this.dataService,
     this.currentUid,
+    this.preferencesStore,
   });
 
   final Vehicle vehicle;
   final DataService? dataService;
+
+  /// Defaults to the app-wide store (or one built on [dataService] in tests).
+  final VehicleControlsPreferencesStore? preferencesStore;
 
   /// The signed-in user's ID. Defaults to the app session; injectable for tests.
   final String? Function()? currentUid;
@@ -31,9 +36,12 @@ class VehicleControlsPage extends StatefulWidget {
 }
 
 class _VehicleControlsPageState extends State<VehicleControlsPage> {
-  late final DataService _data = widget.dataService ?? DataService();
+  late final VehicleControlsPreferencesStore _store =
+      widget.preferencesStore ??
+      (widget.dataService == null
+          ? VehicleControlsPreferencesStore.shared
+          : VehicleControlsPreferencesStore(widget.dataService!));
   final VehicleBleClient _ble = VehicleBleClient.shared;
-  late VehicleAlertEngine _alertEngine;
 
   String? _currentUid() =>
       widget.currentUid?.call() ?? AuthService().currentUser?.uid;
@@ -45,13 +53,12 @@ class _VehicleControlsPageState extends State<VehicleControlsPage> {
   String? _preferencesSaveError;
   double? _pendingTemperature;
   final Map<VehicleDoor, double> _pendingWindowLevels = {};
-  Future<void> _preferenceWriteQueue = Future<void>.value();
 
   @override
   void initState() {
     super.initState();
     _ble.addListener(_onBleChanged);
-    _ble.snapshot.addListener(_onSnapshotChanged);
+    _store.addListener(_onStoreChanged);
     if (kIsWeb) {
       WidgetsBinding.instance.addPostFrameCallback((_) {
         if (mounted) unawaited(_ble.inspectWebCapabilities());
@@ -60,7 +67,7 @@ class _VehicleControlsPageState extends State<VehicleControlsPage> {
     unawaited(_initialize());
   }
 
-  Future<void> _initialize() async {
+  Future<void> _initialize({bool refresh = false}) async {
     if (mounted) {
       setState(() {
         _preferencesLoading = true;
@@ -81,9 +88,10 @@ class _VehicleControlsPageState extends State<VehicleControlsPage> {
       return;
     }
     try {
-      final preferences = await _data.getVehicleControlsPreferences(
-        uid: uid,
-        vehicleId: widget.vehicle.id,
+      final preferences = await _store.load(
+        uid,
+        widget.vehicle.id,
+        refresh: refresh,
       );
       if (!mounted) return;
       if (_currentUid() != uid) {
@@ -94,10 +102,6 @@ class _VehicleControlsPageState extends State<VehicleControlsPage> {
         _preferences = preferences;
         _preferencesLoading = false;
       });
-      _alertEngine = VehicleAlertEngine(
-        activeKeys: preferences.activeAlertKeys,
-      );
-      _onSnapshotChanged();
     } catch (error, stackTrace) {
       debugPrint(
         '[Vehicle Controls] Preferences read failed '
@@ -117,63 +121,23 @@ class _VehicleControlsPageState extends State<VehicleControlsPage> {
     if (mounted) setState(() {});
   }
 
-  void _onSnapshotChanged() {
-    final snapshot = _ble.snapshot.value;
-    if (snapshot == null ||
-        !mounted ||
-        _preferencesLoading ||
-        snapshot.vehicleId != widget.vehicle.id) {
+  /// Alerts are raised app-wide by VehicleAlertCoordinator; this keeps the
+  /// history shown here in step with what it records.
+  void _onStoreChanged() {
+    final uid = _currentUid();
+    if (uid == null || !mounted || _preferencesLoading) return;
+    final stored = _store.cached(uid, widget.vehicle.id);
+    if (stored == null ||
+        (identical(stored.alertHistory, _preferences.alertHistory) &&
+            identical(stored.activeAlertKeys, _preferences.activeAlertKeys))) {
       return;
     }
-    final newAlerts = _alertEngine.evaluate(snapshot);
-    final activeAlertKeys = _alertEngine.activeKeys.toList()..sort();
-    final activeAlertsChanged = !setEquals(
-      _preferences.activeAlertKeys.toSet(),
-      activeAlertKeys.toSet(),
-    );
-    final ids = _preferences.alertHistory.map((alert) => alert.id).toSet();
-    final unseen = newAlerts.where((alert) => !ids.contains(alert.id)).toList();
-    if (unseen.isEmpty && !activeAlertsChanged) return;
-
     setState(() {
       _preferences = _preferences.copyWith(
-        activeAlertKeys: activeAlertKeys,
-        alertHistory: unseen.isEmpty
-            ? _preferences.alertHistory
-            : [
-                ...unseen.reversed,
-                ..._preferences.alertHistory,
-              ].take(50).toList(growable: false),
+        alertHistory: stored.alertHistory,
+        activeAlertKeys: stored.activeAlertKeys,
       );
     });
-    unawaited(_savePreferences(showError: false));
-    if (_preferences.notificationsEnabled) {
-      final alert = unseen.where(_isNotificationEnabled).firstOrNull;
-      if (alert == null) return;
-      ScaffoldMessenger.of(context)
-        ..hideCurrentSnackBar()
-        ..showSnackBar(
-          SnackBar(
-            content: Text('${alert.title}: ${alert.message}'),
-            backgroundColor: alert.severity == VehicleAlertSeverity.critical
-                ? const Color(0xFFB3261E)
-                : null,
-          ),
-        );
-    }
-  }
-
-  bool _isNotificationEnabled(VehicleAlert alert) {
-    if (alert.kind.startsWith('door_')) {
-      return _preferences.safetyAlertsEnabled;
-    }
-    if (alert.kind.startsWith('battery_')) {
-      return _preferences.batteryAlertsEnabled;
-    }
-    if (alert.kind.startsWith('charging_')) {
-      return _preferences.chargingAlertsEnabled;
-    }
-    return false;
   }
 
   Future<void> _savePreferences({bool showError = true}) async {
@@ -188,17 +152,7 @@ class _VehicleControlsPageState extends State<VehicleControlsPage> {
       _preferencesSaveError = null;
     });
     try {
-      final operation = _preferenceWriteQueue
-          .catchError((Object _) {})
-          .then(
-            (_) => _data.saveVehicleControlsPreferences(
-              uid: uid,
-              vehicleId: widget.vehicle.id,
-              preferences: savedPreferences,
-            ),
-          );
-      _preferenceWriteQueue = operation;
-      await operation;
+      await _store.saveSettings(uid, widget.vehicle.id, savedPreferences);
     } catch (error) {
       debugPrint(
         '[Vehicle Controls] Preference write failed '
@@ -352,7 +306,7 @@ class _VehicleControlsPageState extends State<VehicleControlsPage> {
   @override
   void dispose() {
     _ble.removeListener(_onBleChanged);
-    _ble.snapshot.removeListener(_onSnapshotChanged);
+    _store.removeListener(_onStoreChanged);
     super.dispose();
   }
 
@@ -373,7 +327,10 @@ class _VehicleControlsPageState extends State<VehicleControlsPage> {
     body: _preferencesLoading
         ? const Center(child: CircularProgressIndicator())
         : _preferencesError != null
-        ? _PageError(message: _preferencesError!, onRetry: _initialize)
+        ? _PageError(
+            message: _preferencesError!,
+            onRetry: () => _initialize(refresh: true),
+          )
         : LayoutBuilder(
             builder: (context, constraints) {
               final wide = constraints.maxWidth >= 920;
@@ -1559,6 +1516,18 @@ class _AlertTile extends StatelessWidget {
 
   final VehicleAlert alert;
 
+  String _acknowledgement() {
+    String time(DateTime value) =>
+        '${value.hour.toString().padLeft(2, '0')}:'
+        '${value.minute.toString().padLeft(2, '0')}:'
+        '${value.second.toString().padLeft(2, '0')}';
+    final shown = alert.shownAt;
+    final acknowledged = alert.acknowledgedAt;
+    if (shown == null) return 'Not shown (alerts off)';
+    if (acknowledged == null) return 'Shown ${time(shown)} · not acknowledged';
+    return 'Shown ${time(shown)} · Acknowledged ${time(acknowledged)}';
+  }
+
   @override
   Widget build(BuildContext context) {
     final color = switch (alert.severity) {
@@ -1570,13 +1539,22 @@ class _AlertTile extends StatelessWidget {
       dense: true,
       contentPadding: EdgeInsets.zero,
       leading: Icon(
-        alert.severity == VehicleAlertSeverity.critical
-            ? Icons.error_outline_rounded
-            : Icons.warning_amber_rounded,
+        switch (alert.severity) {
+          VehicleAlertSeverity.critical => Icons.error_outline_rounded,
+          VehicleAlertSeverity.warning => Icons.warning_amber_rounded,
+          VehicleAlertSeverity.info => Icons.info_outline_rounded,
+        },
         color: color,
       ),
       title: Text(alert.title, style: const TextStyle(fontSize: 14)),
-      subtitle: Text(alert.message),
+      subtitle: Text(
+        [
+          alert.value == null
+              ? alert.message
+              : '${alert.message} (${alert.value})',
+          if (alert.requiresAcknowledgement) _acknowledgement(),
+        ].join('\n'),
+      ),
       trailing: Text(
         TimeOfDay.fromDateTime(alert.timestamp).format(context),
         style: const TextStyle(fontSize: 11, color: AppTheme.mutedBlue),

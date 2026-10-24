@@ -59,6 +59,374 @@ class VehicleDoorState {
   }
 }
 
+enum MotorOperatingStatus { off, idle, running, overheating }
+
+enum BrakeFluidStatus { ok, low, replace }
+
+class BatteryHealthState {
+  const BatteryHealthState({
+    this.stateOfHealthPercent = 94,
+    this.temperatureC = 25,
+    this.capacityKwh = 60,
+    this.chargeCycles = 312,
+    this.ageMonths = 26,
+    this.voltageV = 397.5,
+  });
+
+  final double stateOfHealthPercent;
+  final double temperatureC;
+  final double capacityKwh;
+  final int chargeCycles;
+  final int ageMonths;
+  final double voltageV;
+
+  Map<String, Object> toJson() => {
+    'stateOfHealthPercent': _round(stateOfHealthPercent),
+    'temperatureC': _round(temperatureC),
+    'capacityKwh': _round(capacityKwh),
+    'chargeCycles': chargeCycles,
+    'ageMonths': ageMonths,
+    'voltageV': _round(voltageV),
+  };
+
+  factory BatteryHealthState.fromJson(Object? value) {
+    final map = _requireMap(value, 'health.battery');
+    return BatteryHealthState(
+      stateOfHealthPercent: _requireRange(
+        map['stateOfHealthPercent'],
+        'health.battery.stateOfHealthPercent',
+        0,
+        100,
+      ),
+      temperatureC: _requireRange(
+        map['temperatureC'],
+        'health.battery.temperatureC',
+        -40,
+        90,
+      ),
+      capacityKwh: _requireRange(
+        map['capacityKwh'],
+        'health.battery.capacityKwh',
+        10,
+        200,
+      ),
+      chargeCycles: _requireIntRange(
+        map['chargeCycles'],
+        'health.battery.chargeCycles',
+        0,
+        10000,
+      ),
+      ageMonths: _requireIntRange(
+        map['ageMonths'],
+        'health.battery.ageMonths',
+        0,
+        600,
+      ),
+      voltageV: _requireRange(
+        map['voltageV'],
+        'health.battery.voltageV',
+        200,
+        1000,
+      ),
+    );
+  }
+
+  BatteryHealthState copyWith({
+    double? stateOfHealthPercent,
+    double? temperatureC,
+    double? capacityKwh,
+    int? chargeCycles,
+    int? ageMonths,
+    double? voltageV,
+  }) => BatteryHealthState(
+    stateOfHealthPercent: stateOfHealthPercent ?? this.stateOfHealthPercent,
+    temperatureC: temperatureC ?? this.temperatureC,
+    capacityKwh: capacityKwh ?? this.capacityKwh,
+    chargeCycles: chargeCycles ?? this.chargeCycles,
+    ageMonths: ageMonths ?? this.ageMonths,
+    voltageV: voltageV ?? this.voltageV,
+  );
+}
+
+class MotorHealthState {
+  const MotorHealthState({
+    this.healthPercent = 96,
+    this.temperatureC = 25,
+    this.rpm = 0,
+    this.efficiencyPercent = 92,
+    this.status = MotorOperatingStatus.off,
+  });
+
+  final double healthPercent;
+  final double temperatureC;
+  final int rpm;
+  final double efficiencyPercent;
+  final MotorOperatingStatus status;
+
+  Map<String, Object> toJson() => {
+    'healthPercent': _round(healthPercent),
+    'temperatureC': _round(temperatureC),
+    'rpm': rpm,
+    'efficiencyPercent': _round(efficiencyPercent),
+    'status': status.name,
+  };
+
+  factory MotorHealthState.fromJson(Object? value) {
+    final map = _requireMap(value, 'health.motor');
+    final status = MotorOperatingStatus.values
+        .where((candidate) => candidate.name == map['status'])
+        .firstOrNull;
+    if (status == null) {
+      throw const FormatException('health.motor.status is not supported.');
+    }
+    return MotorHealthState(
+      healthPercent: _requireRange(
+        map['healthPercent'],
+        'health.motor.healthPercent',
+        0,
+        100,
+      ),
+      temperatureC: _requireRange(
+        map['temperatureC'],
+        'health.motor.temperatureC',
+        -40,
+        200,
+      ),
+      rpm: _requireIntRange(map['rpm'], 'health.motor.rpm', 0, 20000),
+      efficiencyPercent: _requireRange(
+        map['efficiencyPercent'],
+        'health.motor.efficiencyPercent',
+        0,
+        100,
+      ),
+      status: status,
+    );
+  }
+
+  MotorHealthState copyWith({
+    double? healthPercent,
+    double? temperatureC,
+    int? rpm,
+    double? efficiencyPercent,
+    MotorOperatingStatus? status,
+  }) => MotorHealthState(
+    healthPercent: healthPercent ?? this.healthPercent,
+    temperatureC: temperatureC ?? this.temperatureC,
+    rpm: rpm ?? this.rpm,
+    efficiencyPercent: efficiencyPercent ?? this.efficiencyPercent,
+    status: status ?? this.status,
+  );
+}
+
+class TireState {
+  const TireState({this.pressurePsi = 35, this.treadPercent = 85});
+
+  final double pressurePsi;
+  final double treadPercent;
+
+  Map<String, Object> toJson() => {
+    'pressurePsi': _round(pressurePsi),
+    'treadPercent': _round(treadPercent),
+  };
+
+  factory TireState.fromJson(Object? value, String field) {
+    final map = _requireMap(value, field);
+    return TireState(
+      pressurePsi: _requireRange(
+        map['pressurePsi'],
+        '$field.pressurePsi',
+        0,
+        60,
+      ),
+      treadPercent: _requireRange(
+        map['treadPercent'],
+        '$field.treadPercent',
+        0,
+        100,
+      ),
+    );
+  }
+
+  TireState copyWith({double? pressurePsi, double? treadPercent}) =>
+      TireState(
+        pressurePsi: pressurePsi ?? this.pressurePsi,
+        treadPercent: treadPercent ?? this.treadPercent,
+      );
+}
+
+class BrakeHealthState {
+  const BrakeHealthState({
+    this.frontPadPercent = 78,
+    this.rearPadPercent = 84,
+    this.fluidStatus = BrakeFluidStatus.ok,
+  });
+
+  final double frontPadPercent;
+  final double rearPadPercent;
+  final BrakeFluidStatus fluidStatus;
+
+  Map<String, Object> toJson() => {
+    'frontPadPercent': _round(frontPadPercent),
+    'rearPadPercent': _round(rearPadPercent),
+    'fluidStatus': fluidStatus.name,
+  };
+
+  factory BrakeHealthState.fromJson(Object? value) {
+    final map = _requireMap(value, 'health.brakes');
+    final fluid = BrakeFluidStatus.values
+        .where((candidate) => candidate.name == map['fluidStatus'])
+        .firstOrNull;
+    if (fluid == null) {
+      throw const FormatException('health.brakes.fluidStatus is not supported.');
+    }
+    return BrakeHealthState(
+      frontPadPercent: _requireRange(
+        map['frontPadPercent'],
+        'health.brakes.frontPadPercent',
+        0,
+        100,
+      ),
+      rearPadPercent: _requireRange(
+        map['rearPadPercent'],
+        'health.brakes.rearPadPercent',
+        0,
+        100,
+      ),
+      fluidStatus: fluid,
+    );
+  }
+
+  BrakeHealthState copyWith({
+    double? frontPadPercent,
+    double? rearPadPercent,
+    BrakeFluidStatus? fluidStatus,
+  }) => BrakeHealthState(
+    frontPadPercent: frontPadPercent ?? this.frontPadPercent,
+    rearPadPercent: rearPadPercent ?? this.rearPadPercent,
+    fluidStatus: fluidStatus ?? this.fluidStatus,
+  );
+}
+
+class SoftwareState {
+  const SoftwareState({this.version = '4.2.1', this.updateAvailable = false});
+
+  final String version;
+  final bool updateAvailable;
+
+  Map<String, Object> toJson() => {
+    'version': version,
+    'updateAvailable': updateAvailable,
+  };
+
+  factory SoftwareState.fromJson(Object? value) {
+    final map = _requireMap(value, 'health.software');
+    final version = map['version'];
+    if (version is! String ||
+        version.isEmpty ||
+        version.length > 32 ||
+        !RegExp(r'^[0-9A-Za-z.+-]+$').hasMatch(version)) {
+      throw const FormatException('health.software.version is invalid.');
+    }
+    return SoftwareState(
+      version: version,
+      updateAvailable: _requireBool(
+        map['updateAvailable'],
+        'health.software.updateAvailable',
+      ),
+    );
+  }
+
+  SoftwareState copyWith({String? version, bool? updateAvailable}) =>
+      SoftwareState(
+        version: version ?? this.version,
+        updateAvailable: updateAvailable ?? this.updateAvailable,
+      );
+}
+
+/// Optional component-health section of a state snapshot. Snapshots from
+/// simulators that predate it simply omit `state.health`.
+class VehicleHealthState {
+  const VehicleHealthState({
+    this.battery = const BatteryHealthState(),
+    this.motor = const MotorHealthState(),
+    this.tires = const {
+      VehicleDoor.frontLeft: TireState(),
+      VehicleDoor.frontRight: TireState(),
+      VehicleDoor.rearLeft: TireState(),
+      VehicleDoor.rearRight: TireState(),
+    },
+    this.brakes = const BrakeHealthState(),
+    this.software = const SoftwareState(),
+    this.odometerKm = 18450,
+  });
+
+  final BatteryHealthState battery;
+  final MotorHealthState motor;
+
+  /// Keyed by wheel position; uses the same four positions as the doors.
+  final Map<VehicleDoor, TireState> tires;
+  final BrakeHealthState brakes;
+  final SoftwareState software;
+  final double odometerKm;
+
+  TireState tire(VehicleDoor position) => tires[position] ?? const TireState();
+
+  Map<String, Object> toJson() => {
+    'battery': battery.toJson(),
+    'motor': motor.toJson(),
+    'tires': {
+      for (final position in VehicleDoor.values)
+        position.wireName: tire(position).toJson(),
+    },
+    'brakes': brakes.toJson(),
+    'software': software.toJson(),
+    'odometerKm': _round(odometerKm, 2),
+  };
+
+  factory VehicleHealthState.fromJson(Object? value) {
+    final map = _requireMap(value, 'health');
+    final tiresMap = _requireMap(map['tires'], 'health.tires');
+    if (tiresMap.length != VehicleDoor.values.length) {
+      throw const FormatException('health.tires must contain exactly four tires.');
+    }
+    return VehicleHealthState(
+      battery: BatteryHealthState.fromJson(map['battery']),
+      motor: MotorHealthState.fromJson(map['motor']),
+      tires: Map.unmodifiable({
+        for (final position in VehicleDoor.values)
+          position: TireState.fromJson(
+            tiresMap[position.wireName],
+            'health.tires.${position.wireName}',
+          ),
+      }),
+      brakes: BrakeHealthState.fromJson(map['brakes']),
+      software: SoftwareState.fromJson(map['software']),
+      odometerKm: _requireRange(
+        map['odometerKm'],
+        'health.odometerKm',
+        0,
+        2000000,
+      ),
+    );
+  }
+
+  VehicleHealthState copyWith({
+    BatteryHealthState? battery,
+    MotorHealthState? motor,
+    Map<VehicleDoor, TireState>? tires,
+    BrakeHealthState? brakes,
+    SoftwareState? software,
+    double? odometerKm,
+  }) => VehicleHealthState(
+    battery: battery ?? this.battery,
+    motor: motor ?? this.motor,
+    tires: tires ?? this.tires,
+    brakes: brakes ?? this.brakes,
+    software: software ?? this.software,
+    odometerKm: odometerKm ?? this.odometerKm,
+  );
+}
+
 class VehicleControlState {
   const VehicleControlState({
     this.speedKph = 0,
@@ -87,6 +455,7 @@ class VehicleControlState {
       VehicleDoor.rearLeft: 0,
       VehicleDoor.rearRight: 0,
     },
+    this.health,
   });
 
   final double speedKph;
@@ -105,6 +474,9 @@ class VehicleControlState {
   final int fanLevel;
   final Map<VehicleDoor, VehicleDoorState> doors;
   final Map<VehicleDoor, int> windows;
+
+  /// Null when the sender does not report component health.
+  final VehicleHealthState? health;
 
   Map<String, Object> toJson() => {
     'speedKph': speedKph,
@@ -129,6 +501,7 @@ class VehicleControlState {
       for (final door in VehicleDoor.values)
         door.wireName: windows[door] ?? 0,
     },
+    if (health != null) 'health': health!.toJson(),
   };
 
   factory VehicleControlState.fromJson(Object? value) {
@@ -221,6 +594,9 @@ class VehicleControlState {
       fanLevel: fanLevel,
       doors: Map.unmodifiable(doors),
       windows: Map.unmodifiable(windows),
+      health: map['health'] == null
+          ? null
+          : VehicleHealthState.fromJson(map['health']),
     );
   }
 
@@ -241,6 +617,7 @@ class VehicleControlState {
     int? fanLevel,
     Map<VehicleDoor, VehicleDoorState>? doors,
     Map<VehicleDoor, int>? windows,
+    VehicleHealthState? health,
   }) => VehicleControlState(
     speedKph: speedKph ?? this.speedKph,
     batteryPercent: batteryPercent ?? this.batteryPercent,
@@ -258,6 +635,7 @@ class VehicleControlState {
     fanLevel: fanLevel ?? this.fanLevel,
     doors: doors ?? this.doors,
     windows: windows ?? this.windows,
+    health: health ?? this.health,
   );
 }
 
@@ -650,4 +1028,27 @@ double _requireNumber(Object? value, String field) {
     throw FormatException('$field must be a finite number.');
   }
   return value.toDouble();
+}
+
+double _requireRange(Object? value, String field, double min, double max) {
+  final number = _requireNumber(value, field);
+  if (number < min || number > max) {
+    throw FormatException('$field must be between $min and $max.');
+  }
+  return number;
+}
+
+int _requireIntRange(Object? value, String field, int min, int max) {
+  final number = _requireInt(value, field);
+  if (number < min || number > max) {
+    throw FormatException('$field must be between $min and $max.');
+  }
+  return number;
+}
+
+/// Keeps the BLE payload short; senders may hold more precise values.
+num _round(double value, [int decimals = 1]) {
+  final factor = decimals == 2 ? 100 : 10;
+  final rounded = (value * factor).round() / factor;
+  return rounded == rounded.roundToDouble() ? rounded.round() : rounded;
 }

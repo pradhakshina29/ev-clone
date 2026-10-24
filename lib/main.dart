@@ -5,11 +5,22 @@ import 'package:flutter/material.dart';
 import 'app_theme.dart';
 import 'services/api/api_config.dart';
 import 'screens/auth_gate.dart';
+import 'services/vehicle_alert_coordinator.dart';
+import 'services/vehicle_health_history.dart';
 import 'widgets/ev_logo.dart';
+
+/// Let app-wide services show dialogs and SnackBars over any screen.
+final appNavigatorKey = GlobalKey<NavigatorState>();
+final appScaffoldMessengerKey = GlobalKey<ScaffoldMessengerState>();
 
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
   ensureApiBaseUrlConfigured();
+  VehicleAlertCoordinator.startShared(
+    navigatorKey: appNavigatorKey,
+    messengerKey: appScaffoldMessengerKey,
+  );
+  VehicleHealthHistory.startShared();
   runApp(const EVSmartCompanionApp());
 }
 
@@ -19,6 +30,8 @@ class EVSmartCompanionApp extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return MaterialApp(
+      navigatorKey: appNavigatorKey,
+      scaffoldMessengerKey: appScaffoldMessengerKey,
       debugShowCheckedModeBanner: false,
       theme: AppTheme.data,
       themeMode: ThemeMode.light,

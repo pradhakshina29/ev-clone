@@ -112,10 +112,27 @@ snapshot current while the BLE link remains connected.
 The backend (MongoDB) is the source for vehicle/account metadata, service
 history, charging cards and Controls preferences; charging stations come from
 OpenStreetMap. Neither is a fallback source for live measurements, and the
-backend does not store or serve telemetry. The BLE schema does not include battery health, health
-scores, motor temperature, tire pressure/condition, odometer, voltage, or
-similar diagnostics; those remain unavailable rather than being inferred from
-the database or vehicle configuration.
+backend does not store or serve telemetry.
+
+Component health travels in the optional `state.health` section of each
+snapshot: battery (state of health, temperature, capacity, charge cycles, age,
+voltage), motor (health, temperature, RPM, efficiency, status), four tyres
+(pressure, tread), brakes (front/rear pad life, fluid status), software
+(version, update available) and odometer. The simulator derives these from its
+own driving and charging state, and its **Vehicle health** panel and health
+scenarios change them for demos. Snapshots without `health` (older simulators)
+are still accepted, and the app then shows "Not reported". Diagnostics the
+simulator does not send (tyre temperatures, infotainment/firmware versions,
+security status, efficiency and regeneration history) stay unavailable rather
+than being inferred. The battery timeline on Vehicle Health is built only from
+snapshots received during the current session and is cleared on sign-out.
+
+Vehicle alerts are raised app-wide from the shared snapshot. Warnings and
+critical alerts open a dialog over the current screen that only its OK / I
+understand button closes; several alerts are queued and shown one after
+another. Info alerts (charging started/complete, software update, a door open
+or unlocked while parked) show a SnackBar. Each alert is saved in the per-vehicle
+alert history with the time it was shown and acknowledged.
 
 Controls preferences are stored per user and vehicle by the backend
 (`GET`/`PUT /v1/vehicles/{vehicleId}/controls-preferences`). The backend checks
@@ -151,7 +168,9 @@ frame sequence, cap assembled messages at 4080 bytes, then validate JSON,
 version, state ranges, and the exact four-door set.
 
 State notifications have version `1`, type `state`, a vehicle ID, monotonic
-sequence number, timestamp, and vehicle state. Commands have version `1`, type
+sequence number, timestamp, and vehicle state, optionally with a `health`
+section (backward compatible, so the version is unchanged). A full snapshot
+with health is about 1.2 KB, well under the 4080-byte message limit. Commands have version `1`, type
 `command`, a request ID, action, and only the fields required for that action.
 The simulator validates every received command and rejects unsafe door,
 charging, and vehicle-power transitions. The main app repeats those safety

@@ -65,7 +65,143 @@ void main() {
 
       expect(alerts.single.kind, 'door_unlocked_moving_rearRight');
       expect(alerts.single.title, 'Rear right door unlocked while moving');
-      expect(alerts.single.severity, VehicleAlertSeverity.warning);
+      expect(alerts.single.severity, VehicleAlertSeverity.critical);
+      expect(alerts.single.requiresAcknowledgement, isTrue);
+      expect(alerts.single.value, '12 km/h');
+      expect(alerts.single.vehicleId, 'ev-1');
+    });
+
+    test('reports open and unlocked doors while parked as info', () {
+      const snapshot = VehicleStateSnapshot(
+        vehicleId: 'ev-1',
+        sequence: 1,
+        timestampMillis: 1000,
+        state: VehicleControlState(
+          doors: {
+            VehicleDoor.frontLeft: VehicleDoorState(open: true, locked: false),
+            VehicleDoor.frontRight: VehicleDoorState(locked: false),
+            VehicleDoor.rearLeft: VehicleDoorState(),
+            VehicleDoor.rearRight: VehicleDoorState(),
+          },
+        ),
+      );
+
+      final alerts = VehicleAlertEngine().evaluate(snapshot);
+
+      expect(alerts.map((alert) => alert.kind), [
+        'door_open_parked_frontLeft',
+        'door_unlocked_parked_frontRight',
+      ]);
+      expect(
+        alerts.every((alert) => alert.severity == VehicleAlertSeverity.info),
+        isTrue,
+      );
+      expect(alerts.any((alert) => alert.requiresAcknowledgement), isFalse);
+    });
+
+    test('raises every health alert with its live value', () {
+      const snapshot = VehicleStateSnapshot(
+        vehicleId: 'EV001',
+        sequence: 5,
+        timestampMillis: 1000,
+        state: VehicleControlState(
+          health: VehicleHealthState(
+            battery: BatteryHealthState(temperatureC: 58),
+            motor: MotorHealthState(temperatureC: 112),
+            tires: {
+              VehicleDoor.frontLeft: TireState(pressurePsi: 24),
+              VehicleDoor.frontRight: TireState(pressurePsi: 28),
+              VehicleDoor.rearLeft: TireState(pressurePsi: 44),
+              VehicleDoor.rearRight: TireState(treadPercent: 15),
+            },
+            brakes: BrakeHealthState(
+              frontPadPercent: 12,
+              rearPadPercent: 25,
+              fluidStatus: BrakeFluidStatus.low,
+            ),
+            software: SoftwareState(updateAvailable: true),
+          ),
+        ),
+      );
+
+      final alerts = {
+        for (final alert in VehicleAlertEngine().evaluate(snapshot))
+          alert.kind: alert,
+      };
+
+      expect(alerts['motor_overheating_critical']!.title, 'Motor overheating');
+      expect(alerts['motor_overheating_critical']!.value, '112 °C');
+      expect(
+        alerts['battery_overheating_critical']!.severity,
+        VehicleAlertSeverity.critical,
+      );
+      expect(alerts['battery_overheating_critical']!.value, '58 °C');
+      expect(
+        alerts['tire_pressure_low_frontLeft_critical']!.title,
+        'Low tyre pressure (front left)',
+      );
+      expect(alerts['tire_pressure_low_frontLeft_critical']!.value, '24.0 psi');
+      expect(
+        alerts['tire_pressure_low_frontRight_warning']!.severity,
+        VehicleAlertSeverity.warning,
+      );
+      expect(alerts, contains('tire_pressure_high_rearLeft_warning'));
+      expect(alerts, contains('tire_tread_low_rearRight_warning'));
+      expect(
+        alerts['brake_pads_worn_front_critical']!.severity,
+        VehicleAlertSeverity.critical,
+      );
+      expect(alerts['brake_pads_worn_front_critical']!.value, '12%');
+      expect(
+        alerts['brake_pads_worn_rear_warning']!.severity,
+        VehicleAlertSeverity.warning,
+      );
+      expect(alerts, contains('brake_fluid_warning'));
+      expect(
+        alerts['software_update_available']!.severity,
+        VehicleAlertSeverity.info,
+      );
+    });
+
+    test('a healthy health section raises nothing', () {
+      const snapshot = VehicleStateSnapshot(
+        vehicleId: 'EV001',
+        sequence: 1,
+        timestampMillis: 1000,
+        state: VehicleControlState(health: VehicleHealthState()),
+      );
+      expect(VehicleAlertEngine().evaluate(snapshot), isEmpty);
+    });
+
+    test('escalates from warning to critical but stays quiet cooling down', () {
+      final engine = VehicleAlertEngine();
+      VehicleStateSnapshot motorAt(int sequence, double celsius) =>
+          VehicleStateSnapshot(
+            vehicleId: 'EV001',
+            sequence: sequence,
+            timestampMillis: sequence * 1000,
+            state: VehicleControlState(
+              health: VehicleHealthState(
+                motor: MotorHealthState(temperatureC: celsius),
+              ),
+            ),
+          );
+
+      expect(
+        engine.evaluate(motorAt(1, 100)).single.kind,
+        'motor_overheating_warning',
+      );
+      expect(engine.evaluate(motorAt(2, 101)), isEmpty);
+      expect(
+        engine.evaluate(motorAt(3, 112)).single.kind,
+        'motor_overheating_critical',
+      );
+      expect(engine.evaluate(motorAt(4, 100)), isEmpty);
+      expect(engine.evaluate(motorAt(5, 60)), isEmpty);
+      expect(
+        engine.evaluate(motorAt(6, 112)).single.kind,
+        'motor_overheating_critical',
+      );
     });
 
     test('reports charging start and interruption once per transition', () {
@@ -139,5 +275,42 @@ void main() {
     );
     expect(decoded.selectedProfileId, 'profile-1');
     expect(decoded.activeAlertKeys, ['battery_low', 'charging_active']);
+  });
+
+  test('alert acknowledgements round-trip and older records still load', () {
+    final alert = VehicleAlert(
+      id: 'EV001_motor_overheating_critical_9',
+      kind: 'motor_overheating_critical',
+      title: 'Motor overheating',
+      message: 'Stop safely.',
+      severity: VehicleAlertSeverity.critical,
+      timestamp: DateTime.utc(2026, 10, 25, 9),
+      value: '112 °C',
+      vehicleId: 'EV001',
+      shownAt: DateTime.utc(2026, 10, 25, 9, 0, 1),
+      acknowledgedAt: DateTime.utc(2026, 10, 25, 9, 0, 7),
+    );
+
+    final decoded = VehicleAlert.fromMap(alert.toMap());
+
+    expect(decoded.value, '112 °C');
+    expect(decoded.vehicleId, 'EV001');
+    expect(decoded.shownAt?.toUtc(), DateTime.utc(2026, 10, 25, 9, 0, 1));
+    expect(
+      decoded.acknowledgedAt?.toUtc(),
+      DateTime.utc(2026, 10, 25, 9, 0, 7),
+    );
+
+    final legacy = VehicleAlert.fromMap({
+      'id': 'a1',
+      'kind': 'battery_low',
+      'title': 'Battery running low',
+      'message': 'Below 20%.',
+      'severity': 'warning',
+      'timestamp': '2026-10-01T00:00:00.000Z',
+    });
+    expect(legacy.shownAt, isNull);
+    expect(legacy.acknowledgedAt, isNull);
+    expect(legacy.toMap().containsKey('acknowledgedAt'), isFalse);
   });
 }

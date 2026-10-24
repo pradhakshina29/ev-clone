@@ -355,6 +355,49 @@ describe('vehicles', () => {
       });
     expect(tooMany.status).toBe(400);
   });
+
+  it('keeps alert acknowledgements and still accepts older alert records', async () => {
+    const app = apiApp();
+    const oldAlert = {
+      id: 'EV001_battery_low_3',
+      kind: 'battery_low',
+      title: 'Battery running low',
+      message: 'Battery is below 20%.',
+      severity: 'warning',
+      timestamp: '2026-10-25T09:00:00.000Z',
+    };
+    const acknowledged = {
+      ...oldAlert,
+      id: 'EV001_motor_overheating_critical_9',
+      kind: 'motor_overheating_critical',
+      severity: 'critical',
+      value: '112 °C',
+      vehicleId: 'EV001',
+      shownAt: '2026-10-25T09:00:01.000Z',
+      acknowledgedAt: '2026-10-25T09:00:07.000Z',
+    };
+    const saved = await request(app)
+      .put('/v1/vehicles/EV001/controls-preferences')
+      .set(bearer('alice'))
+      .send({ preferences: { ...validPreferences, alertHistory: [acknowledged, oldAlert] } });
+    expect(saved.status).toBe(200);
+
+    const reloaded = await request(app)
+      .get('/v1/vehicles/EV001/controls-preferences')
+      .set(bearer('alice'));
+    expect(reloaded.body.preferences.alertHistory).toEqual([acknowledged, oldAlert]);
+
+    const tooLong = await request(app)
+      .put('/v1/vehicles/EV001/controls-preferences')
+      .set(bearer('alice'))
+      .send({
+        preferences: {
+          ...validPreferences,
+          alertHistory: [{ ...acknowledged, value: 'x'.repeat(65) }],
+        },
+      });
+    expect(tooLong.status).toBe(400);
+  });
 });
 
 describe('charging card', () => {

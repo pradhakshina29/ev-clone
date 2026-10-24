@@ -6,6 +6,8 @@ import 'package:vehicle_ble_protocol/vehicle_ble_protocol.dart';
 import '../services/auth_service.dart';
 import '../app_theme.dart';
 import '../models/vehicle.dart';
+import '../models/vehicle_health.dart';
+import '../models/vehicle_telemetry.dart';
 import '../services/distance_unit_service.dart';
 import '../services/data_service.dart';
 import '../services/weather_service.dart';
@@ -219,7 +221,9 @@ class _HomeScreenState extends State<HomeScreen> {
                     service: weatherService,
                     distanceUnit: _distanceUnit,
                   );
-                  final summary = const _VehicleHealthSummary();
+                  final summary = _VehicleHealthSummary(
+                    snapshot: matchingSnapshot,
+                  );
                   final actions = _QuickActions(
                     onControls: () => Navigator.push(
                       context,
@@ -775,10 +779,24 @@ class _ChargeBadge extends StatelessWidget {
 }
 
 class _VehicleHealthSummary extends StatelessWidget {
-  const _VehicleHealthSummary();
+  const _VehicleHealthSummary({required this.snapshot});
+
+  final VehicleStateSnapshot? snapshot;
 
   @override
   Widget build(BuildContext context) {
+    final telemetry = VehicleData.fromSnapshot(snapshot);
+    final health = telemetry == null
+        ? null
+        : VehicleHealthData.fromTelemetry(telemetry);
+    final needsAttention = health?.components
+        .where(
+          (component) =>
+              component.status == VehicleHealthStatus.attention ||
+              component.status == VehicleHealthStatus.critical,
+        )
+        .map((component) => component.label)
+        .toList();
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 16),
       decoration: BoxDecoration(
@@ -789,11 +807,11 @@ class _VehicleHealthSummary extends StatelessWidget {
         builder: (context, constraints) {
           final compact = constraints.maxWidth < 470;
           final content = [
-            const Expanded(
+            Expanded(
               flex: 2,
               child: Text(
-                'Vehicle health: N/A',
-                style: TextStyle(
+                'Vehicle health: ${health == null ? 'N/A' : _sentenceCase(health.overallStatus)}',
+                style: const TextStyle(
                   fontWeight: FontWeight.w700,
                   color: AppTheme.navy,
                 ),
@@ -801,12 +819,18 @@ class _VehicleHealthSummary extends StatelessWidget {
             ),
             _SummaryMetric(
               label: 'BATTERY HEALTH',
-              value: 'N/A',
+              value: telemetry == null
+                  ? 'N/A'
+                  : '${telemetry.batteryHealth.round()}%',
               icon: Icons.favorite_outline,
             ),
             _SummaryMetric(
-              label: 'HEALTH DATA',
-              value: 'Not in BLE feed',
+              label: 'NEEDS ATTENTION',
+              value: needsAttention == null
+                  ? 'Not reported'
+                  : needsAttention.isEmpty
+                  ? 'Nothing'
+                  : needsAttention.join(', '),
               icon: Icons.info_outline,
             ),
           ];
@@ -835,6 +859,9 @@ class _VehicleHealthSummary extends StatelessWidget {
     );
   }
 }
+
+String _sentenceCase(String value) =>
+    value.isEmpty ? value : value[0] + value.substring(1).toLowerCase();
 
 class _SummaryMetric extends StatelessWidget {
   const _SummaryMetric({

@@ -36,6 +36,10 @@ const alertSchema = new Schema(
     message: { type: String, required: true, maxlength: 1000 },
     severity: { type: String, required: true, maxlength: 20 },
     timestamp: { type: String, required: true, maxlength: 40 },
+    value: { type: String, maxlength: 64 },
+    vehicleId: { type: String, maxlength: 64 },
+    shownAt: { type: String, maxlength: 40 },
+    acknowledgedAt: { type: String, maxlength: 40 },
   },
   { _id: false },
 );

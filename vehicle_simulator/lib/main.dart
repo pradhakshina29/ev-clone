@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:vehicle_ble_protocol/vehicle_ble_protocol.dart';
 
+import 'vehicle_health_simulation.dart';
 import 'vehicle_simulator_peripheral.dart';
 
 void main() => runApp(const VehicleSimulatorApp());
@@ -343,8 +344,7 @@ class _VehicleSimulatorPageState extends State<VehicleSimulatorPage> {
               ),
               const SizedBox(height: 8),
               OutlinedButton.icon(
-                onPressed: () =>
-                    _peripheral.updateState(const VehicleControlState()),
+                onPressed: _peripheral.restoreNormalState,
                 icon: const Icon(Icons.restart_alt_rounded),
                 label: const Text('Restore Normal State'),
               ),
@@ -370,6 +370,13 @@ class _VehicleSimulatorPageState extends State<VehicleSimulatorPage> {
                     ActionChip(
                       label: Text(scenario),
                       onPressed: () => _applyScenario(scenario),
+                    ),
+                  for (final scenario in HealthScenario.values)
+                    ActionChip(
+                      avatar: const Icon(Icons.monitor_heart_outlined, size: 18),
+                      label: Text(scenario.label),
+                      onPressed: () =>
+                          _peripheral.applyHealthScenario(scenario),
                     ),
                 ],
               ),
@@ -528,6 +535,16 @@ class _VehicleSimulatorPageState extends State<VehicleSimulatorPage> {
                 ),
               ),
               const SizedBox(height: 12),
+              _HealthPanel(
+                state: state,
+                autoUpdate: _peripheral.autoHealthUpdate,
+                onAutoUpdateChanged: (value) {
+                  _peripheral.setAutoHealthUpdate(value);
+                  setState(() {});
+                },
+                onChanged: _peripheral.updateHealth,
+              ),
+              const SizedBox(height: 12),
               _Panel(
                 title: 'Simulator event log',
                 child: Column(
@@ -630,6 +647,246 @@ class _DoorControl extends StatelessWidget {
         label: 'Window $windowLevel%',
         onChanged: (value) => onWindowChanged(value.round()),
       ),
+    ],
+  );
+}
+
+class _HealthPanel extends StatelessWidget {
+  const _HealthPanel({
+    required this.state,
+    required this.autoUpdate,
+    required this.onAutoUpdateChanged,
+    required this.onChanged,
+  });
+
+  final VehicleControlState state;
+  final bool autoUpdate;
+  final ValueChanged<bool> onAutoUpdateChanged;
+  final ValueChanged<VehicleHealthState> onChanged;
+
+  @override
+  Widget build(BuildContext context) {
+    final health = state.health ?? const VehicleHealthState();
+    final battery = health.battery;
+    final motor = health.motor;
+    final brakes = health.brakes;
+    return _Panel(
+      title: 'Vehicle health',
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          SwitchListTile(
+            contentPadding: EdgeInsets.zero,
+            title: const Text('Auto-update from driving/charging'),
+            subtitle: const Text(
+              'Off: values change only when you move a control.',
+            ),
+            value: autoUpdate,
+            onChanged: onAutoUpdateChanged,
+          ),
+          const _SubTitle('Battery'),
+          _SliderControl(
+            label: 'State of health',
+            value: battery.stateOfHealthPercent,
+            minimum: 50,
+            maximum: 100,
+            divisions: 50,
+            display: '${battery.stateOfHealthPercent.round()}%',
+            onChanged: (value) => onChanged(
+              health.copyWith(
+                battery: battery.copyWith(stateOfHealthPercent: value),
+              ),
+            ),
+          ),
+          _SliderControl(
+            label: 'Battery temperature',
+            value: battery.temperatureC,
+            minimum: -20,
+            maximum: 80,
+            divisions: 100,
+            display: '${battery.temperatureC.toStringAsFixed(1)} °C',
+            onChanged: (value) => onChanged(
+              health.copyWith(battery: battery.copyWith(temperatureC: value)),
+            ),
+          ),
+          _ReadOnlyValues(
+            values: {
+              'Voltage': '${battery.voltageV.toStringAsFixed(1)} V',
+              'Capacity': '${battery.capacityKwh.toStringAsFixed(1)} kWh',
+              'Charge cycles': '${battery.chargeCycles}',
+              'Age': '${battery.ageMonths} months',
+            },
+          ),
+          const _SubTitle('Motor'),
+          _SliderControl(
+            label: 'Motor health',
+            value: motor.healthPercent,
+            maximum: 100,
+            divisions: 100,
+            display: '${motor.healthPercent.round()}%',
+            onChanged: (value) => onChanged(
+              health.copyWith(motor: motor.copyWith(healthPercent: value)),
+            ),
+          ),
+          _SliderControl(
+            label: 'Motor temperature',
+            value: motor.temperatureC,
+            maximum: 150,
+            divisions: 150,
+            display: '${motor.temperatureC.toStringAsFixed(1)} °C',
+            onChanged: (value) => onChanged(
+              health.copyWith(motor: motor.copyWith(temperatureC: value)),
+            ),
+          ),
+          _SliderControl(
+            label: 'Motor efficiency',
+            value: motor.efficiencyPercent,
+            minimum: 50,
+            maximum: 100,
+            divisions: 50,
+            display: '${motor.efficiencyPercent.round()}%',
+            onChanged: (value) => onChanged(
+              health.copyWith(motor: motor.copyWith(efficiencyPercent: value)),
+            ),
+          ),
+          _ReadOnlyValues(
+            values: {'RPM': '${motor.rpm}', 'Status': motor.status.name},
+          ),
+          const _SubTitle('Tyres'),
+          for (final position in VehicleDoor.values) ...[
+            _SliderControl(
+              label: '${position.label} pressure',
+              value: health.tire(position).pressurePsi,
+              minimum: 15,
+              maximum: 50,
+              divisions: 70,
+              display:
+                  '${health.tire(position).pressurePsi.toStringAsFixed(1)} psi',
+              onChanged: (value) => onChanged(
+                health.copyWith(
+                  tires: {
+                    ...health.tires,
+                    position: health.tire(position).copyWith(pressurePsi: value),
+                  },
+                ),
+              ),
+            ),
+            _SliderControl(
+              label: '${position.label} tread',
+              value: health.tire(position).treadPercent,
+              maximum: 100,
+              divisions: 20,
+              display: '${health.tire(position).treadPercent.round()}%',
+              onChanged: (value) => onChanged(
+                health.copyWith(
+                  tires: {
+                    ...health.tires,
+                    position: health
+                        .tire(position)
+                        .copyWith(treadPercent: value),
+                  },
+                ),
+              ),
+            ),
+          ],
+          const _SubTitle('Brakes'),
+          _SliderControl(
+            label: 'Front pads',
+            value: brakes.frontPadPercent,
+            maximum: 100,
+            divisions: 100,
+            display: '${brakes.frontPadPercent.toStringAsFixed(1)}%',
+            onChanged: (value) => onChanged(
+              health.copyWith(brakes: brakes.copyWith(frontPadPercent: value)),
+            ),
+          ),
+          _SliderControl(
+            label: 'Rear pads',
+            value: brakes.rearPadPercent,
+            maximum: 100,
+            divisions: 100,
+            display: '${brakes.rearPadPercent.toStringAsFixed(1)}%',
+            onChanged: (value) => onChanged(
+              health.copyWith(brakes: brakes.copyWith(rearPadPercent: value)),
+            ),
+          ),
+          Row(
+            children: [
+              const Expanded(child: Text('Brake fluid')),
+              SegmentedButton<BrakeFluidStatus>(
+                segments: const [
+                  ButtonSegment(value: BrakeFluidStatus.ok, label: Text('OK')),
+                  ButtonSegment(
+                    value: BrakeFluidStatus.low,
+                    label: Text('Low'),
+                  ),
+                  ButtonSegment(
+                    value: BrakeFluidStatus.replace,
+                    label: Text('Replace'),
+                  ),
+                ],
+                selected: {brakes.fluidStatus},
+                onSelectionChanged: (value) => onChanged(
+                  health.copyWith(
+                    brakes: brakes.copyWith(fluidStatus: value.single),
+                  ),
+                ),
+              ),
+            ],
+          ),
+          const _SubTitle('Software and odometer'),
+          SwitchListTile(
+            contentPadding: EdgeInsets.zero,
+            title: Text('Software ${health.software.version}'),
+            subtitle: const Text('Update available'),
+            value: health.software.updateAvailable,
+            onChanged: (value) => onChanged(
+              health.copyWith(
+                software: health.software.copyWith(updateAvailable: value),
+              ),
+            ),
+          ),
+          _SliderControl(
+            label: 'Odometer',
+            value: health.odometerKm,
+            maximum: 200000,
+            divisions: 200,
+            display: '${health.odometerKm.toStringAsFixed(1)} km',
+            onChanged: (value) => onChanged(health.copyWith(odometerKm: value)),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _SubTitle extends StatelessWidget {
+  const _SubTitle(this.title);
+
+  final String title;
+
+  @override
+  Widget build(BuildContext context) => Padding(
+    padding: const EdgeInsets.only(top: 12, bottom: 2),
+    child: Text(title, style: const TextStyle(fontWeight: FontWeight.w700)),
+  );
+}
+
+class _ReadOnlyValues extends StatelessWidget {
+  const _ReadOnlyValues({required this.values});
+
+  final Map<String, String> values;
+
+  @override
+  Widget build(BuildContext context) => Wrap(
+    spacing: 16,
+    runSpacing: 4,
+    children: [
+      for (final entry in values.entries)
+        Text(
+          '${entry.key}: ${entry.value}',
+          style: const TextStyle(color: Colors.black54),
+        ),
     ],
   );
 }

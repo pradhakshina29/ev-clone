@@ -7,6 +7,8 @@ import 'package:flutter/foundation.dart';
 import 'package:flutter/services.dart';
 import 'package:vehicle_ble_protocol/vehicle_ble_protocol.dart';
 
+import 'vehicle_health_simulation.dart';
+
 class VehicleSimulatorPeripheral extends ChangeNotifier {
   static const MethodChannel _diagnosticsChannel = MethodChannel(
     'com.evsmartcompanion.vehicle_simulator/ble_diagnostics',
@@ -40,6 +42,9 @@ class VehicleSimulatorPeripheral extends ChangeNotifier {
     _connectionSubscription = _manager.connectionStateChanged.listen(
       _onConnectionChanged,
     );
+    _healthTimer = Timer.periodic(const Duration(seconds: 1), (_) {
+      _tickHealth();
+    });
     unawaited(_logBluetoothDiagnostics('simulator startup'));
   }
 
@@ -59,7 +64,10 @@ class VehicleSimulatorPeripheral extends ChangeNotifier {
   late final StreamSubscription<CentralConnectionStateChangedEventArgs>
   _connectionSubscription;
 
-  VehicleControlState _state = const VehicleControlState();
+  final VehicleHealthSimulator _healthSimulator = VehicleHealthSimulator();
+  VehicleControlState _state = const VehicleControlState(
+    health: VehicleHealthState(),
+  );
   String _vehicleId = '';
   String _advertisedName = defaultVehicleSimulatorName;
   String? _error;
@@ -72,6 +80,7 @@ class VehicleSimulatorPeripheral extends ChangeNotifier {
   bool _notificationInFlight = false;
   Timer? _stateNotificationTimer;
   Timer? _chargingProgressTimer;
+  Timer? _healthTimer;
   Future<void> _notificationQueue = Future<void>.value();
 
   VehicleControlState get state => _state;
@@ -79,6 +88,7 @@ class VehicleSimulatorPeripheral extends ChangeNotifier {
   String get advertisedName => _advertisedName;
   String? get error => _error;
   bool get advertising => _advertising;
+  bool get autoHealthUpdate => _healthSimulator.autoUpdate;
   List<String> get eventLog => List.unmodifiable(_eventLog);
   bool get isAuthorizedPlatform =>
       defaultTargetPlatform == TargetPlatform.android;
@@ -242,7 +252,11 @@ class VehicleSimulatorPeripheral extends ChangeNotifier {
 
   void updateState(VehicleControlState state, {String? event}) {
     final wasCharging = _state.chargingConnected;
-    _state = state;
+    // Callers that build a state without health keep the current readings.
+    final withHealth = state.health == null
+        ? state.copyWith(health: _state.health)
+        : state;
+    _state = _healthSimulator.recordStateChange(_state, withHealth);
     _sequence++;
     notifyListeners();
     if (event != null) {
@@ -266,6 +280,57 @@ class VehicleSimulatorPeripheral extends ChangeNotifier {
     if (_advertising && _subscribers.isNotEmpty) {
       _scheduleStateNotification();
     }
+  }
+
+  /// Replaces the health readings (manual controls). The motor status follows
+  /// the new temperature and the current driving state.
+  void updateHealth(VehicleHealthState health) {
+    updateState(
+      _state.copyWith(
+        health: health.copyWith(
+          motor: health.motor.copyWith(
+            status: VehicleHealthSimulator.motorStatusFor(
+              _state,
+              health.motor.temperatureC,
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+
+  void applyHealthScenario(HealthScenario scenario) {
+    updateState(
+      _healthSimulator.applyScenario(scenario, _state),
+      event: 'Scenario: ${scenario.label}',
+    );
+  }
+
+  void restoreNormalState() {
+    updateState(_healthSimulator.reset(), event: 'Restored normal state');
+  }
+
+  void setAutoHealthUpdate(bool enabled) {
+    _healthSimulator.autoUpdate = enabled;
+    _recordEvent(
+      enabled
+          ? 'Health values follow driving and charging'
+          : 'Health values are manual only',
+    );
+  }
+
+  void _tickHealth() {
+    if (_disposed) return;
+    final current = _state.health;
+    final next = _healthSimulator.tick(_state);
+    // Only send a snapshot when a reported (rounded) value actually changed;
+    // otherwise keep the precise values so slow changes still accumulate.
+    if (current != null &&
+        jsonEncode(current.toJson()) == jsonEncode(next.toJson())) {
+      _state = _state.copyWith(health: next);
+      return;
+    }
+    updateState(_state.copyWith(health: next));
   }
 
   void _startChargingProgress() {
@@ -499,6 +564,7 @@ class VehicleSimulatorPeripheral extends ChangeNotifier {
     _connectionSubscription.cancel();
     _stateNotificationTimer?.cancel();
     _chargingProgressTimer?.cancel();
+    _healthTimer?.cancel();
     if (_advertising) unawaited(_manager.stopAdvertising());
     unawaited(_manager.removeAllServices());
     super.dispose();

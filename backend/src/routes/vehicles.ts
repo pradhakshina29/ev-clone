@@ -65,6 +65,11 @@ const alertSchema = z.strictObject({
   message: requiredText(1000),
   severity: requiredText(20),
   timestamp: requiredText(40),
+  // Added with must-acknowledge alerts; older records have none of these.
+  value: text(64).optional(),
+  vehicleId: text(64).optional(),
+  shownAt: text(40).optional(),
+  acknowledgedAt: text(40).optional(),
 });
 const preferencesSchema = z.strictObject({
   notificationsEnabled: z.boolean(),
