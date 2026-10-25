@@ -51,6 +51,7 @@ class TripFeasibilityService {
     required GeocodedDestination destination,
     required RoadRoute route,
     required List<ChargingStation> stations,
+    bool stationSearchFailed = false,
   }) {
     final points = route.points;
     final measuredGeometryLength = _geometryDistanceKm(points);
@@ -253,7 +254,13 @@ class TripFeasibilityService {
         )
         .toList(growable: false);
     final warnings = <String>[];
-    if (stations.isEmpty) {
+    if (stationSearchFailed) {
+      warnings.add(
+        'Charging stations could not be loaded because the map service is '
+        'busy. The route is shown; tap Plan Trip again to retry the station '
+        'search.',
+      );
+    } else if (stations.isEmpty) {
       warnings.add('No live charging stations were found along this route.');
     }
     if (!feasible) {

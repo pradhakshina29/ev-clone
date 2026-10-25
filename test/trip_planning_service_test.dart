@@ -372,4 +372,74 @@ void main() {
       expect(result.route.distanceKm, 14);
     },
   );
+
+  test('keeps the route when every charging-station server fails', () async {
+    const selected = GeocodedDestination(
+      name: 'Mysuru',
+      displayName: 'Mysuru, Karnataka, India',
+      address: 'Mysuru, Karnataka, India',
+      placeId: 'N/1',
+      addressComponents: {'city': 'Mysuru'},
+      location: LatLng(12.3, 76.64),
+    );
+    final client = MockClient((request) async {
+      if (request.url.host == 'router.project-osrm.org') {
+        return http.Response(
+          jsonEncode({
+            'code': 'Ok',
+            'routes': [
+              {
+                'distance': 145000,
+                'duration': 10800,
+                'geometry': {
+                  'coordinates': [
+                    [77.59, 12.97],
+                    [76.64, 12.3],
+                  ],
+                },
+              },
+            ],
+          }),
+          200,
+        );
+      }
+      // Every Overpass server is overloaded.
+      return http.Response('busy', 504);
+    });
+    addTearDown(client.close);
+    final planner = TripPlanningService(
+      directions: RoadDirectionsService(
+        client: client,
+        api: FakeApi().client(),
+      ),
+      stations: ChargingStationService(client: client, api: FakeApi().client()),
+    );
+    final request = requestFor(
+      vehicleId: 'EV006',
+      maximumRangeKm: 300,
+      batteryPercentage: 100,
+      destination: selected.displayLabel,
+    );
+
+    final result = await planner.plan(
+      TripPlanningRequest(
+        start: const LatLng(12.97, 77.59),
+        destinationQuery: request.destinationQuery,
+        selectedDestination: selected,
+        vehicle: request.vehicle,
+      ),
+    );
+
+    expect(result.route.distanceKm, 145);
+    expect(result.route.points, isNotEmpty);
+    expect(result.liveStations, isEmpty);
+    expect(
+      result.warnings,
+      contains(contains('Charging stations could not be loaded')),
+    );
+    expect(
+      result.warnings,
+      isNot(contains('No live charging stations were found along this route.')),
+    );
+  });
 }

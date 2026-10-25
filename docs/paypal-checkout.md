@@ -50,11 +50,38 @@ endpoint; only a successful backend capture marks the recharge successful. The a
 
 ## Android and iOS
 
-Native Android/iOS currently retain the clearly labeled external PayPal
-approval URL fallback. Native PayPal SDK checkout return handling is pending
-until the project has a real HTTPS domain configured and verified for Android
-App Links and iOS Universal Links. No placeholder domain or deep-link
-association is configured.
+The app creates the order with `"returnTo": "app"`. The backend then sets
+PayPal's `return_url` / `cancel_url` to the app deep links
+`evsmartcompanion://paypal-return` and `evsmartcompanion://paypal-cancel`
+(PayPal Sandbox accepts custom-scheme return URLs). Web orders keep their
+previous URLs because the SDK popup ignores them.
+
+1. **Continue to PayPal** opens the approval page in a Chrome Custom Tab
+   (Android) or `ASWebAuthenticationSession` (iOS) through
+   `flutter_web_auth_2`. The deep links reach the app through the same
+   exported `CallbackActivity` as the Spotify sign-in (Android manifest:
+   hosts `spotify-callback`, `paypal-return`, `paypal-cancel`).
+2. The dialog shows **Waiting for PayPal…** with **Confirm payment**,
+   **Open PayPal again** and **Cancel** always available.
+3. How the payer comes back:
+   - **Return link** (approved): the app calls the backend capture right away.
+   - **Cancel link**: "Payment cancelled in PayPal. No money was taken."
+   - **Tab closed** without a link: "PayPal was closed. If you finished
+     paying, tap Confirm payment…".
+4. **Confirm payment** calls the backend capture. If the payer has not
+   approved yet, the backend answers `409 paypal_not_approved`; the order stays
+   pending and the dialog explains what to do. Nothing is credited.
+5. Only a successful backend capture shows **Recharge successful**. The
+   capture is idempotent (one credit per order). The card balance and the
+   transaction list refresh at once, and **Download invoice** hands the PDF
+   to the share sheet.
+
+The dialog cannot be dismissed by tapping outside it, scrolls on small screens
+and above the keyboard, and blocks Back only while the capture is being
+confirmed.
+
+A native PayPal SDK checkout with verified App Links / Universal Links would
+need a real HTTPS domain; none is configured.
 
 ## Official SDK references
 

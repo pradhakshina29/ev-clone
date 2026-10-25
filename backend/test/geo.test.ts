@@ -1,7 +1,7 @@
 import request from 'supertest';
 import { describe, expect, it } from 'vitest';
 
-import { OVERPASS_ENDPOINTS } from '../src/services/geo.js';
+import { OVERPASS_ENDPOINTS, USER_AGENT } from '../src/services/geo.js';
 import { apiApp, fakeFetch, jsonResponse } from './fixtures.js';
 import { bearer } from './helpers.js';
 
@@ -86,6 +86,25 @@ describe('geo route proxy', () => {
   });
 });
 
+describe('geo route cache and contact', () => {
+  it('identifies the project to the map servers and caches a found route', async () => {
+    const osrm = fakeFetch(() => jsonResponse({ code: 'Ok', routes: [] }));
+    const app = apiApp({ geoFetch: osrm.fetch });
+    const route = () =>
+      request(app)
+        .get('/v1/geo/route')
+        .query({ fromLat: 12.97, fromLon: 77.59, toLat: 12.3, toLon: 76.64 })
+        .set(bearer('alice'));
+    expect((await route()).status).toBe(200);
+    expect((await route()).status).toBe(200);
+    expect(osrm.requests).toHaveLength(1);
+    expect((osrm.requests[0]?.init?.headers as Record<string, string>)['User-Agent']).toBe(
+      USER_AGENT,
+    );
+    expect(USER_AGENT).toContain('https://github.com/pradhakshina29/ev-clone');
+  });
+});
+
 describe('geo overpass proxy', () => {
   it('only forwards charging-station searches', async () => {
     const overpass = fakeFetch(() => jsonResponse({ elements: [] }));
@@ -134,7 +153,21 @@ describe('geo overpass proxy', () => {
       .set(bearer('alice'))
       .send({ data: stationQuery });
     expect(response.status).toBe(200);
-    expect(overpass.requests.map((sent) => sent.url)).toEqual(OVERPASS_ENDPOINTS);
+    expect(overpass.requests.map((sent) => sent.url)).toEqual(OVERPASS_ENDPOINTS.slice(0, 3));
+  });
+
+  it('answers a repeated search from the cache but never caches a failure', async () => {
+    let calls = 0;
+    const overpass = fakeFetch(() =>
+      calls++ === 0 ? new Response('busy', { status: 504 }) : jsonResponse({ elements: [] }),
+    );
+    const app = apiApp({ geoFetch: overpass.fetch });
+    const send = () =>
+      request(app).post(OVERPASS).set(bearer('alice')).send({ data: stationQuery });
+    expect((await send()).status).toBe(200);
+    const requestsAfterFirst = overpass.requests.length;
+    expect((await send()).status).toBe(200);
+    expect(overpass.requests).toHaveLength(requestsAfterFirst);
   });
 
   it('reports map_busy when every server fails and does not retry a rejected query', async () => {

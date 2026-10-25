@@ -1,4 +1,4 @@
-import { Router } from 'express';
+import { Router, type Request } from 'express';
 import { ipKeyGenerator, rateLimit } from 'express-rate-limit';
 import { z } from 'zod';
 
@@ -41,20 +41,27 @@ export type AuthRouterOptions = {
   loginPerEmailLimit?: number;
 };
 
+/**
+ * Per-IP rate-limit key. ipKeyGenerator is called directly (not through a
+ * wrapper) so express-rate-limit's ERR_ERL_KEY_GEN_IPV6 check can see it;
+ * IPv6 clients share one key per /56 subnet, IPv4 clients one per address.
+ */
+export const ipRateLimitKey = (prefix: string) => (req: Request) =>
+  `${prefix}:${ipKeyGenerator(req.ip ?? '')}`;
+
 const tooManyAttempts = () =>
   new HttpError(429, 'rate_limited', 'Too many attempts. Please wait a few minutes and try again.');
 
 /** Public auth endpoints, mounted at /v1/auth before requireAuth. */
 export function authRouter(options: AuthRouterOptions) {
   const router = Router();
-  const ipKey = (ip: string | undefined) => ipKeyGenerator(ip ?? '');
 
   const loginPerIp = rateLimit({
     windowMs: 15 * 60 * 1000,
     limit: options.loginPerIpLimit ?? 30,
     standardHeaders: 'draft-8',
     legacyHeaders: false,
-    keyGenerator: (req) => `login-ip:${ipKey(req.ip)}`,
+    keyGenerator: ipRateLimitKey('login-ip'),
     handler: (_req, _res, next) => next(tooManyAttempts()),
   });
   const loginPerEmail = rateLimit({
@@ -75,7 +82,7 @@ export function authRouter(options: AuthRouterOptions) {
     limit: 10,
     standardHeaders: 'draft-8',
     legacyHeaders: false,
-    keyGenerator: (req) => `signup-ip:${ipKey(req.ip)}`,
+    keyGenerator: ipRateLimitKey('signup-ip'),
     handler: (_req, _res, next) => next(tooManyAttempts()),
   });
 

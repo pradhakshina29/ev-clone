@@ -3,6 +3,7 @@ import request from 'supertest';
 import { describe, expect, it, vi } from 'vitest';
 
 import { logger } from '../src/logger.js';
+import { assistantModels } from '../src/services/assistant.js';
 import { apiApp, fakeFetch, jsonResponse } from './fixtures.js';
 import { bearer } from './helpers.js';
 
@@ -156,6 +157,58 @@ describe('learning assistant', () => {
         .send({ message: 'Hello?' });
       expect(response.status).toBe(503);
     }
+  });
+
+  it('asks the fallback model after a network error, a 500, empty output or a retired model', async () => {
+    for (const failFirst of [
+      () => {
+        throw new TypeError('fetch failed');
+      },
+      () => jsonResponse({ error: { message: 'internal' } }, 500),
+      () => jsonResponse({ steps: [] }),
+      () => jsonResponse({ error: { message: 'model not found' } }, 404),
+    ]) {
+      const gemini = fakeFetch((_url, init) => {
+        const { model } = JSON.parse(String(init?.body)) as { model: string };
+        return model === 'gemini-flash-latest' ? failFirst() : geminiAnswer('Second model.');
+      });
+      const response = await request(
+        apiApp({ geminiFetch: gemini.fetch, geminiFallbackModel: 'gemini-flash-lite-latest' }),
+      )
+        .post(ASK)
+        .set(bearer('alice'))
+        .send({ message: 'Hello?' });
+      expect(response.status).toBe(200);
+      expect(response.body.answer).toBe('Second model.');
+    }
+  });
+
+  it('reports a misconfigured model when every model name is unknown', async () => {
+    const gemini = fakeFetch(() => jsonResponse({ error: { message: 'not found' } }, 404));
+    const response = await request(
+      apiApp({ geminiFetch: gemini.fetch, geminiFallbackModel: 'gemini-flash-lite-latest' }),
+    )
+      .post(ASK)
+      .set(bearer('alice'))
+      .send({ message: 'Hello?' });
+    expect(response.body.error.code).toBe('assistant_not_configured');
+    expect(gemini.requests).toHaveLength(2);
+  });
+
+  it('still has a different fallback when the fallback equals the model', () => {
+    expect(
+      assistantModels({
+        model: 'gemini-flash-lite-latest',
+        fallbackModel: 'gemini-flash-lite-latest',
+      }),
+    ).toEqual(['gemini-flash-lite-latest', 'gemini-flash-latest']);
+    expect(assistantModels({ model: 'gemini-flash-latest' })).toEqual([
+      'gemini-flash-latest',
+      'gemini-flash-lite-latest',
+    ]);
+    expect(
+      assistantModels({ model: 'gemini-2.5-flash', fallbackModel: 'gemini-2.5-flash-lite' }),
+    ).toEqual(['gemini-2.5-flash', 'gemini-2.5-flash-lite']);
   });
 
   it('limits each user to 20 questions per minute', async () => {

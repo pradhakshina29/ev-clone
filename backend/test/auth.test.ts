@@ -1,14 +1,15 @@
 import bcrypt from 'bcryptjs';
 import { SignJWT } from 'jose';
 import request from 'supertest';
-import { beforeAll, beforeEach, describe, expect, it } from 'vitest';
+import type { Request } from 'express';
+import { beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { createApp } from '../src/app.js';
 import { createJwtVerifier } from '../src/middleware/auth.js';
 import { RefreshToken } from '../src/models/refreshToken.js';
 import { User } from '../src/models/user.js';
 import { Vehicle } from '../src/models/vehicle.js';
-import { authRouter } from '../src/routes/auth.js';
+import { authRouter, ipRateLimitKey } from '../src/routes/auth.js';
 import { meRouter } from '../src/routes/me.js';
 import { EV001, EV002, seedVehicles } from './fixtures.js';
 
@@ -242,5 +243,33 @@ describe('login, refresh and logout', () => {
         })
       ).status,
     ).toBe(401);
+  });
+});
+
+describe('rate-limit keys', () => {
+  const key = (ip: string) => ipRateLimitKey('login-ip')({ ip } as Request);
+
+  it('groups IPv6 clients per /56 subnet and keeps IPv4 clients apart', () => {
+    expect(key('2001:db8:1:1::1')).toBe(key('2001:db8:1:2::9'));
+    expect(key('2001:db8:1:1::1')).not.toBe(key('2001:db8:2::1'));
+    expect(key('203.0.113.7')).toBe('login-ip:203.0.113.7');
+    expect(key('203.0.113.7')).not.toBe(key('203.0.113.8'));
+  });
+
+  it('passes express-rate-limit validation without ERR_ERL_KEY_GEN_IPV6', async () => {
+    const logged = vi.spyOn(console, 'error').mockImplementation(() => {});
+    try {
+      const app = authApp();
+      await request(app).post('/v1/auth/signup').send(signUpBody());
+      await request(app)
+        .post('/v1/auth/login')
+        .send({ email: 'alice@example.com', password: PASSWORD });
+      const codes = logged.mock.calls.flat().map((arg) => (arg as { code?: unknown })?.code);
+      expect(
+        codes.filter((code) => typeof code === 'string' && code.startsWith('ERR_ERL')),
+      ).toEqual([]);
+    } finally {
+      logged.mockRestore();
+    }
   });
 });

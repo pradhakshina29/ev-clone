@@ -18,6 +18,18 @@ export const PAYPAL_SANDBOX_CURRENCY = 'USD';
 export const CONVERSION_TYPE = 'demo_fixed_rate';
 const PAYPAL_TIMEOUT_MS = 15_000;
 
+/**
+ * Where PayPal sends the payer after approving or cancelling. The Android/iOS
+ * app opens checkout in a browser tab and is brought back by these deep
+ * links; the web app uses the SDK popup, which ignores them.
+ */
+export const APP_RETURN_URL = 'evsmartcompanion://paypal-return';
+export const APP_CANCEL_URL = 'evsmartcompanion://paypal-cancel';
+const WEB_RETURN_URL = 'https://example.com/paypal-return';
+const WEB_CANCEL_URL = 'https://example.com/paypal-cancel';
+
+export type RechargeReturnTo = 'app' | 'web';
+
 export type PayPalConfig = {
   clientId: string;
   clientSecret: string;
@@ -149,6 +161,14 @@ async function paypalRequest(
 function mapPayPalFailure(error: unknown, operation: string): never {
   if (error instanceof HttpError) throw error;
   if (error instanceof PayPalApiError) {
+    // Capturing before the payer approved (they came back without paying).
+    if (error.status === 422 && error.details.some((d) => d.issue === 'ORDER_NOT_APPROVED')) {
+      throw new HttpError(
+        409,
+        'paypal_not_approved',
+        'This payment has not been approved in PayPal yet. Finish paying in PayPal, or cancel.',
+      );
+    }
     if (error.status === 422) {
       throw new HttpError(400, 'paypal_rejected', `PayPal Sandbox rejected the ${operation}.`);
     }
@@ -181,6 +201,7 @@ export async function createRechargeOrder(
   uid: string,
   vehicleId: string,
   amountInr: number,
+  returnTo: RechargeReturnTo = 'web',
 ) {
   const amountPaise = validateRechargeAmount(amountInr);
   const card = await requireCard(uid, vehicleId);
@@ -211,8 +232,8 @@ export async function createRechargeOrder(
           brand_name: 'EV Smart Companion',
           landing_page: 'LOGIN',
           user_action: 'PAY_NOW',
-          return_url: 'https://example.com/paypal-return',
-          cancel_url: 'https://example.com/paypal-cancel',
+          return_url: returnTo === 'app' ? APP_RETURN_URL : WEB_RETURN_URL,
+          cancel_url: returnTo === 'app' ? APP_CANCEL_URL : WEB_CANCEL_URL,
         },
       },
     });

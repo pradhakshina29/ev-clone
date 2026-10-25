@@ -51,7 +51,11 @@ const transactionsQuery = z.object({
   limit: z.coerce.number().int().min(1).max(100).default(50),
 });
 
-const createOrderSchema = z.object({ amountInr: z.number() });
+// returnTo "app": PayPal returns to the Android/iOS app through a deep link.
+const createOrderSchema = z.object({
+  amountInr: z.number(),
+  returnTo: z.enum(['app', 'web']).optional(),
+});
 const orderParams = vehicleIdParams.extend({
   orderId: z.string().regex(/^[A-Za-z0-9_-]{1,128}$/, 'Invalid PayPal order ID.'),
 });
@@ -142,10 +146,12 @@ export function chargingCardRouter(paypal: PayPalConfig) {
     validate({ params: vehicleIdParams, body: createOrderSchema }),
     async (req, res) => {
       const { vehicleId } = validParams(req, vehicleIdParams);
-      const { amountInr } = validBody(req, createOrderSchema);
+      const { amountInr, returnTo } = validBody(req, createOrderSchema);
       res
         .status(201)
-        .json(await createRechargeOrder(paypal, currentUser(req).uid, vehicleId, amountInr));
+        .json(
+          await createRechargeOrder(paypal, currentUser(req).uid, vehicleId, amountInr, returnTo),
+        );
     },
   );
 

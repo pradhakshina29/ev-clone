@@ -6,6 +6,7 @@ import 'package:latlong2/latlong.dart';
 
 import '../models/road_route.dart';
 import 'api/api_client.dart';
+import 'osm_user_agent.dart';
 
 class RoadDirectionsService {
   RoadDirectionsService({http.Client? client, ApiClient? api})
@@ -281,13 +282,7 @@ class RoadDirectionsService {
     late final http.Response response;
     try {
       response = await _client
-          .get(
-            uri,
-            headers: {
-              'User-Agent': 'EVSmartCompanion/1.0 (charging route search)',
-              ...headers,
-            },
-          )
+          .get(uri, headers: {'User-Agent': osmUserAgent, ...headers})
           .timeout(const Duration(seconds: 20));
     } catch (error, stackTrace) {
       debugPrint('OpenStreetMap route request failed: $error\n$stackTrace');

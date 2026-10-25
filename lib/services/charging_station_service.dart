@@ -8,6 +8,7 @@ import 'package:latlong2/latlong.dart';
 
 import '../models/charging_station.dart';
 import 'api/api_client.dart';
+import 'osm_user_agent.dart';
 
 /// Every public OpenStreetMap (Overpass) server was busy or unreachable.
 class MapServiceBusyException implements Exception {
@@ -398,9 +399,10 @@ out center tags;
       final response = await _client
           .post(
             endpoint,
-            headers: const {
+            headers: {
               'Accept': 'application/json',
               'Content-Type': 'application/x-www-form-urlencoded',
+              if (!kIsWeb) 'User-Agent': osmUserAgent,
             },
             body: {'data': query},
           )

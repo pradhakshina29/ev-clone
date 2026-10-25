@@ -33,7 +33,9 @@
                 <category android:name="android.intent.category.LAUNCHER"/>
             </intent-filter>
         </activity>
-        <!-- Receives the Spotify sign-in redirect (evsmartcompanion://spotify-callback). -->
+        <!-- Receives the Spotify sign-in redirect (evsmartcompanion://spotify-callback)
+             and the PayPal return/cancel redirects (evsmartcompanion://paypal-return,
+             evsmartcompanion://paypal-cancel). -->
         <activity
             android:name="com.linusu.flutter_web_auth_2.CallbackActivity"
             android:exported="true"
@@ -43,6 +45,8 @@
                 <category android:name="android.intent.category.DEFAULT" />
                 <category android:name="android.intent.category.BROWSABLE" />
                 <data android:scheme="evsmartcompanion" android:host="spotify-callback" />
+                <data android:scheme="evsmartcompanion" android:host="paypal-return" />
+                <data android:scheme="evsmartcompanion" android:host="paypal-cancel" />
             </intent-filter>
         </activity>
         <!-- Don't delete the meta-data below.

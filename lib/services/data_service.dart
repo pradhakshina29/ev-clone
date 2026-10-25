@@ -507,6 +507,9 @@ class DataService {
     required String vehicleId,
     required double amount,
     String currency = 'INR',
+    // Android/iOS: PayPal returns to the app through the
+    // evsmartcompanion://paypal-return and paypal-cancel deep links.
+    bool returnToApp = false,
   }) async {
     if (!amount.isFinite || amount <= 0) {
       throw ArgumentError('Recharge amount must be greater than zero.');
@@ -517,7 +520,7 @@ class DataService {
     return _map(
       await _api.post(
         '${_vehiclePath(vehicleId)}/charging-card/paypal-orders',
-        {'amountInr': amount},
+        {'amountInr': amount, if (returnToApp) 'returnTo': 'app'},
       ),
     );
   }

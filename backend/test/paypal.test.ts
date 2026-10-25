@@ -178,6 +178,61 @@ describe('PayPal recharge', () => {
     expect(response.body).toMatchObject({ amount: 1000, paypalAmount: 12 });
   });
 
+  it('returns to the app through deep links only when the app asks for it', async () => {
+    await seedCard('alice', 'EV001');
+    const contexts: Record<string, unknown>[] = [];
+    for (const body of [{ amountInr: 100, returnTo: 'app' }, { amountInr: 100 }]) {
+      const sandbox = paypalSandbox({ orderId: `ORDER${contexts.length}` });
+      const response = await request(apiApp({ paypalFetch: sandbox.fetch }))
+        .post(ORDERS)
+        .set(bearer('alice'))
+        .send(body);
+      expect(response.status).toBe(201);
+      const sent = sandbox.requests.find((r) => r.url === `${PAYPAL_BASE}/v2/checkout/orders`);
+      contexts.push(
+        (JSON.parse(String(sent?.init?.body)) as { application_context: Record<string, unknown> })
+          .application_context,
+      );
+    }
+    expect(contexts[0]).toMatchObject({
+      return_url: 'evsmartcompanion://paypal-return',
+      cancel_url: 'evsmartcompanion://paypal-cancel',
+    });
+    expect(contexts[1]).toMatchObject({ return_url: 'https://example.com/paypal-return' });
+
+    const invalid = await request(apiApp({ paypalFetch: paypalSandbox().fetch }))
+      .post(ORDERS)
+      .set(bearer('alice'))
+      .send({ amountInr: 100, returnTo: 'https://evil.example' });
+    expect(invalid.status).toBe(400);
+  });
+
+  it('reports an unapproved order as not approved and credits nothing', async () => {
+    await seedCard('alice', 'EV001', 5_000);
+    const created = paypalSandbox({ orderId: 'UNAPPROVED1' });
+    await request(apiApp({ paypalFetch: created.fetch }))
+      .post(ORDERS)
+      .set(bearer('alice'))
+      .send({ amountInr: 100, returnTo: 'app' });
+    const notApproved = fakeFetch((url) =>
+      url.endsWith('/v1/oauth2/token')
+        ? jsonResponse({ access_token: 'test-only-token' })
+        : jsonResponse(
+            { name: 'UNPROCESSABLE_ENTITY', details: [{ issue: 'ORDER_NOT_APPROVED' }] },
+            422,
+          ),
+    );
+    const response = await request(apiApp({ paypalFetch: notApproved.fetch }))
+      .post(`${ORDERS}/UNAPPROVED1/capture`)
+      .set(bearer('alice'));
+    expect(response.status).toBe(409);
+    expect(response.body.error.code).toBe('paypal_not_approved');
+    expect((await ChargingCard.findOne({ uid: 'alice' }).lean())?.balancePaise).toBe(5_000);
+    expect(await CardTransaction.countDocuments()).toBe(0);
+    // The order stays pending, so paying afterwards can still be captured.
+    expect((await PaypalOrder.findById('UNAPPROVED1').lean())?.status).toBe('PENDING');
+  });
+
   it('never forwards raw PayPal errors to the app', async () => {
     await seedCard('alice', 'EV001');
     const paypal = fakeFetch((url) =>

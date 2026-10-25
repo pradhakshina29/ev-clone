@@ -72,17 +72,18 @@ export async function askLearningAssistant(
     .filter(Boolean)
     .join('\n\n');
 
-  const models = [config.model, config.fallbackModel].filter(
-    (model, index, all): model is string => !!model && all.indexOf(model) === index,
-  );
+  const models = assistantModels(config);
   let failure: ModelFailure = 'unavailable';
   for (const model of models) {
     const result = await askModel(config, model, userPrompt);
-    if (typeof result === 'string') return result;
-    failure = result.failure;
-    // Only an overloaded or rate-limited model is worth retrying on another
-    // Gemini model; a rejected key or bad request would fail the same way.
-    if (failure !== 'busy') break;
+    if (typeof result === 'string') {
+      logger.info({ model }, 'Learning assistant answered');
+      return result;
+    }
+    // The most telling failure decides the message.
+    if (FAILURE_RANK[result.failure] > FAILURE_RANK[failure]) failure = result.failure;
+    // A rejected key or bad request fails the same way on every model.
+    if (result.failure === 'rejected') break;
   }
   if (failure === 'busy') {
     throw new HttpError(
@@ -91,7 +92,7 @@ export async function askLearningAssistant(
       'The EV learning assistant is busy right now. Please try again in a minute.',
     );
   }
-  if (failure === 'rejected') {
+  if (failure === 'rejected' || failure === 'model_missing') {
     throw new HttpError(
       503,
       'assistant_not_configured',
@@ -101,7 +102,31 @@ export async function askLearningAssistant(
   throw temporarilyUnavailable();
 }
 
-type ModelFailure = 'busy' | 'rejected' | 'unavailable';
+type ModelFailure = 'busy' | 'model_missing' | 'rejected' | 'unavailable';
+const FAILURE_RANK: Record<ModelFailure, number> = {
+  unavailable: 0,
+  busy: 1,
+  model_missing: 2,
+  rejected: 3,
+};
+
+const FLASH = 'gemini-flash-latest';
+const FLASH_LITE = 'gemini-flash-lite-latest';
+
+/**
+ * The configured model, then one fallback. When the fallback is unset or the
+ * same as the model, the other Gemini Flash alias is used so a retry still
+ * reaches a different model.
+ */
+export function assistantModels(config: Pick<AssistantConfig, 'model' | 'fallbackModel'>) {
+  const fallback =
+    config.fallbackModel && config.fallbackModel !== config.model
+      ? config.fallbackModel
+      : config.model === FLASH_LITE
+        ? FLASH
+        : FLASH_LITE;
+  return [...new Set([config.model, fallback].filter(Boolean))];
+}
 
 async function askModel(
   config: AssistantConfig,
@@ -153,9 +178,11 @@ async function askModel(
       },
       'Learning assistant provider rejected the request',
     );
-    if (response.status === 429 || response.status === 503) return { failure: 'busy' };
-    // 400 (invalid key), 401/403 (key or project disabled), 404 (retired model).
-    if ([400, 401, 403, 404].includes(response.status)) return { failure: 'rejected' };
+    if ([429, 500, 502, 503, 504].includes(response.status)) return { failure: 'busy' };
+    // 400 (invalid key), 401/403 (key or project disabled).
+    if ([400, 401, 403].includes(response.status)) return { failure: 'rejected' };
+    // A retired or misspelled model name; the fallback model may still work.
+    if (response.status === 404) return { failure: 'model_missing' };
     return { failure: 'unavailable' };
   }
 

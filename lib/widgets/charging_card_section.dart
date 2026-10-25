@@ -3,7 +3,6 @@ import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter/foundation.dart';
-import 'package:url_launcher/url_launcher.dart';
 
 import '../app_theme.dart';
 import '../models/charging_card.dart';
@@ -11,6 +10,7 @@ import '../models/vehicle.dart';
 import '../services/api/api_client.dart';
 import '../services/data_service.dart';
 import '../services/invoice_file_service.dart';
+import '../services/paypal_app_checkout.dart';
 import '../services/paypal_web_checkout_bridge.dart';
 
 class ChargingCardSection extends StatelessWidget {
@@ -277,7 +277,9 @@ class ChargingCardSection extends StatelessWidget {
   void _showRechargeMessage(BuildContext context, Vehicle vehicle) {
     showDialog<void>(
       context: context,
-      builder: (dialogContext) => _RechargeDialog(
+      // An accidental tap outside must not throw away a PayPal order.
+      barrierDismissible: false,
+      builder: (dialogContext) => RechargeDialog(
         uid: uid,
         vehicle: vehicle,
         dataService: dataService,
@@ -751,24 +753,38 @@ class _ChargingCardFormState extends State<_ChargingCardForm> {
       value == null || value.trim().isEmpty ? 'This field is required.' : null;
 }
 
-class _RechargeDialog extends StatefulWidget {
-  const _RechargeDialog({
+/// Where the Android/iOS PayPal checkout stands; the web uses the SDK popup.
+enum _NativeCheckoutStage {
+  idle,
+  waitingForPayPal,
+  confirming,
+  notCompleted,
+  cancelled,
+  failed,
+}
+
+@visibleForTesting
+class RechargeDialog extends StatefulWidget {
+  const RechargeDialog({
+    super.key,
     required this.uid,
     required this.vehicle,
     required this.dataService,
     required this.currentBalance,
+    this.approvalLauncher = openPayPalApproval,
   });
 
   final String uid;
   final Vehicle vehicle;
   final DataService dataService;
   final Future<double> currentBalance;
+  final PayPalApprovalLauncher approvalLauncher;
 
   @override
-  State<_RechargeDialog> createState() => _RechargeDialogState();
+  State<RechargeDialog> createState() => _RechargeDialogState();
 }
 
-class _RechargeDialogState extends State<_RechargeDialog> {
+class _RechargeDialogState extends State<RechargeDialog> {
   static const List<double> _presetAmounts = [100, 250, 500, 1000];
   static const double _demoExchangeRateInrToUsd = 0.012;
 
@@ -785,6 +801,9 @@ class _RechargeDialogState extends State<_RechargeDialog> {
   String? _statusMessage;
   bool _webCheckoutReady = false;
   bool _awaitingWebCapture = false;
+  _NativeCheckoutStage _stage = _NativeCheckoutStage.idle;
+  // Ignores a late PayPal result once the user moved on (e.g. confirmed).
+  int _approvalAttempt = 0;
   StreamSubscription<PayPalWebCheckoutEvent>? _webCheckoutSubscription;
 
   @override
@@ -862,6 +881,7 @@ class _RechargeDialogState extends State<_RechargeDialog> {
         vehicleId: widget.vehicle.id,
         amount: _selectedAmount,
         currency: 'INR',
+        returnToApp: !kIsWeb,
       );
       final orderId = (response['orderId'] ?? '').toString();
       final approvalUrl = (response['approvalUrl'] ?? '').toString();
@@ -897,29 +917,72 @@ class _RechargeDialogState extends State<_RechargeDialog> {
         }
         setState(() {
           _approvalUrl = approvalUrl;
-          _statusMessage = 'Waiting for approval in external PayPal checkout.';
+          _processing = false;
         });
-        final opened = await launchUrl(
-          approvalUri,
-          mode: LaunchMode.externalApplication,
-        );
-        if (!opened) {
-          setState(() {
-            _statusMessage = 'Payment failed.';
-            _error = 'Could not open external PayPal Sandbox checkout.';
-          });
-        } else {
-          setState(() => _processing = false);
-        }
+        await _openPayPal();
       }
     } catch (error) {
+      if (!mounted) return;
       setState(() {
         _processing = false;
+        _stage = _NativeCheckoutStage.failed;
         _statusMessage = 'Payment failed.';
         _error = error.toString();
       });
     }
   }
+
+  /// Android/iOS: opens PayPal in a browser tab and acts on how the payer
+  /// comes back. Only a successful backend capture counts as paid.
+  Future<void> _openPayPal() async {
+    final orderId = _orderId;
+    final approvalUri = Uri.tryParse(_approvalUrl ?? '');
+    if (orderId == null || approvalUri == null) return;
+    final attempt = ++_approvalAttempt;
+    setState(() {
+      _stage = _NativeCheckoutStage.waitingForPayPal;
+      _error = null;
+      _statusMessage =
+          'Waiting for PayPal… Complete the payment on the PayPal page and '
+          'you will be brought back here.';
+    });
+    PayPalApprovalOutcome outcome;
+    try {
+      outcome = await widget.approvalLauncher(approvalUri, orderId);
+    } catch (error) {
+      if (!_isCurrentApproval(attempt)) return;
+      setState(() {
+        _stage = _NativeCheckoutStage.failed;
+        _statusMessage = 'Could not open PayPal checkout.';
+        _error = error.toString();
+      });
+      return;
+    }
+    if (!_isCurrentApproval(attempt)) return;
+    switch (outcome) {
+      case PayPalApprovalOutcome.returned:
+        await _captureApprovedOrder();
+      case PayPalApprovalOutcome.cancelled:
+        setState(() {
+          _stage = _NativeCheckoutStage.cancelled;
+          _statusMessage =
+              'Payment cancelled in PayPal. No money was taken. You can open '
+              'PayPal again or close this window.';
+        });
+      case PayPalApprovalOutcome.dismissed:
+        setState(() {
+          _stage = _NativeCheckoutStage.notCompleted;
+          _statusMessage =
+              'PayPal was closed. If you finished paying, tap Confirm payment. '
+              'Otherwise open PayPal again or cancel.';
+        });
+    }
+  }
+
+  bool _isCurrentApproval(int attempt) =>
+      mounted &&
+      attempt == _approvalAttempt &&
+      _stage == _NativeCheckoutStage.waitingForPayPal;
 
   Future<void> _prepareWebCheckout() async {
     final orderId = _orderId;
@@ -977,10 +1040,12 @@ class _RechargeDialogState extends State<_RechargeDialog> {
   Future<void> _captureApprovedOrder([String? approvedOrderId]) async {
     final orderId = _orderId;
     if (_processing || orderId == null || orderId.isEmpty) return;
+    _approvalAttempt++;
     setState(() {
       _processing = true;
+      _stage = _NativeCheckoutStage.confirming;
       _error = null;
-      _statusMessage = 'Processing payment...';
+      _statusMessage = 'Confirming payment with PayPal…';
     });
     try {
       debugPrint('[PayPal Recharge] Calling capturePayPalRechargeOrder');
@@ -995,6 +1060,7 @@ class _RechargeDialogState extends State<_RechargeDialog> {
         finishPayPalWebCheckoutCapture(success: true);
         _awaitingWebCapture = false;
       }
+      if (!mounted) return;
       setState(() {
         _success = true;
         _balanceAfter = balanceAfter;
@@ -1007,310 +1073,321 @@ class _RechargeDialogState extends State<_RechargeDialog> {
         finishPayPalWebCheckoutCapture(success: false);
         _awaitingWebCapture = false;
       }
+      if (!mounted) return;
+      if (error is ApiException && error.code == 'paypal_not_approved') {
+        // The payer came back without approving; nothing was charged.
+        setState(() {
+          _processing = false;
+          _stage = _NativeCheckoutStage.notCompleted;
+          _error = null;
+          _statusMessage =
+              'PayPal has not confirmed this payment yet. Finish paying in '
+              'PayPal, then tap Confirm payment, or cancel.';
+        });
+        return;
+      }
       setState(() {
         _processing = false;
-        _statusMessage = 'Payment failed.';
+        _stage = _NativeCheckoutStage.failed;
+        _statusMessage = 'Payment failed. No balance was added.';
         _error = error.toString();
       });
     }
   }
 
+  bool get _confirming => _stage == _NativeCheckoutStage.confirming;
+
   @override
   Widget build(BuildContext context) {
-    return Dialog(
-      insetPadding: const EdgeInsets.all(20),
-      child: ConstrainedBox(
-        constraints: const BoxConstraints(maxWidth: 520),
-        child: Padding(
-          padding: const EdgeInsets.fromLTRB(20, 18, 20, 20),
-          child: FutureBuilder<double>(
-            future: widget.currentBalance,
-            builder: (context, snapshot) {
-              final currentBalance = snapshot.data ?? 0.0;
-              final previewPaypalAmount = double.parse(
-                (_selectedAmount * _demoExchangeRateInrToUsd).toStringAsFixed(
-                  2,
-                ),
-              );
-              final paypalAmount = _paypalAmount ?? previewPaypalAmount;
-              if (_success) {
+    // Scrolls on small phones and above the keyboard; Back is blocked only
+    // while the capture is being confirmed.
+    return PopScope(
+      canPop: !_confirming,
+      child: Dialog(
+        insetPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 24),
+        child: ConstrainedBox(
+          constraints: const BoxConstraints(maxWidth: 520),
+          child: SingleChildScrollView(
+            padding: const EdgeInsets.fromLTRB(20, 18, 20, 20),
+            child: FutureBuilder<double>(
+              future: widget.currentBalance,
+              builder: (context, snapshot) {
+                final currentBalance = snapshot.data ?? 0.0;
+                final previewPaypalAmount = double.parse(
+                  (_selectedAmount * _demoExchangeRateInrToUsd).toStringAsFixed(
+                    2,
+                  ),
+                );
+                final paypalAmount = _paypalAmount ?? previewPaypalAmount;
+                if (_success) {
+                  return Column(
+                    mainAxisSize: MainAxisSize.min,
+                    crossAxisAlignment: CrossAxisAlignment.stretch,
+                    children: [
+                      const Icon(
+                        Icons.check_circle_rounded,
+                        color: Color(0xFF16845B),
+                        size: 52,
+                      ),
+                      const SizedBox(height: 12),
+                      const Text(
+                        'Recharge successful',
+                        textAlign: TextAlign.center,
+                        style: TextStyle(
+                          color: AppTheme.navy,
+                          fontSize: 22,
+                          fontWeight: FontWeight.w800,
+                        ),
+                      ),
+                      const SizedBox(height: 8),
+                      Text(
+                        '₹${_selectedAmount.toStringAsFixed(2)} has been added to your charging card.',
+                        textAlign: TextAlign.center,
+                        style: const TextStyle(color: AppTheme.mutedBlue),
+                      ),
+                      const SizedBox(height: 12),
+                      _CardValue(
+                        label: 'Current balance',
+                        value: _formatMoney(
+                          _balanceAfter ?? currentBalance,
+                          'INR',
+                        ),
+                      ),
+                      if (_rechargeTransactionId case final transactionId?) ...[
+                        const SizedBox(height: 12),
+                        InvoiceDownloadButton(
+                          dataService: widget.dataService,
+                          vehicleId: widget.vehicle.id,
+                          transactionId: transactionId,
+                        ),
+                      ],
+                      const SizedBox(height: 12),
+                      FilledButton(
+                        onPressed: () => Navigator.of(context).pop(),
+                        child: const Text('Done'),
+                      ),
+                    ],
+                  );
+                }
+
                 return Column(
                   mainAxisSize: MainAxisSize.min,
                   crossAxisAlignment: CrossAxisAlignment.stretch,
                   children: [
-                    const Icon(
-                      Icons.check_circle_rounded,
-                      color: Color(0xFF16845B),
-                      size: 52,
-                    ),
-                    const SizedBox(height: 12),
-                    const Text(
-                      'Recharge successful',
-                      textAlign: TextAlign.center,
-                      style: TextStyle(
-                        color: AppTheme.navy,
-                        fontSize: 22,
-                        fontWeight: FontWeight.w800,
-                      ),
-                    ),
-                    const SizedBox(height: 8),
-                    Text(
-                      '₹${_selectedAmount.toStringAsFixed(2)} has been added to your charging card.',
-                      textAlign: TextAlign.center,
-                      style: const TextStyle(color: AppTheme.mutedBlue),
-                    ),
-                    const SizedBox(height: 12),
-                    _CardValue(
-                      label: 'Current balance',
-                      value: _formatMoney(
-                        _balanceAfter ?? currentBalance,
-                        'INR',
-                      ),
-                    ),
-                    if (_rechargeTransactionId case final transactionId?) ...[
-                      const SizedBox(height: 12),
-                      InvoiceDownloadButton(
-                        dataService: widget.dataService,
-                        vehicleId: widget.vehicle.id,
-                        transactionId: transactionId,
-                      ),
-                    ],
-                    const SizedBox(height: 12),
-                    FilledButton(
-                      onPressed: () => Navigator.of(context).pop(),
-                      child: const Text('Done'),
-                    ),
-                  ],
-                );
-              }
-
-              return Column(
-                mainAxisSize: MainAxisSize.min,
-                crossAxisAlignment: CrossAxisAlignment.stretch,
-                children: [
-                  Row(
-                    children: [
-                      const Expanded(
-                        child: Text(
-                          'Recharge EV Charging Card',
-                          style: TextStyle(
-                            color: AppTheme.navy,
-                            fontSize: 21,
-                            fontWeight: FontWeight.w800,
-                          ),
-                        ),
-                      ),
-                      IconButton(
-                        onPressed: () => Navigator.of(context).pop(),
-                        icon: const Icon(Icons.close_rounded),
-                      ),
-                    ],
-                  ),
-                  const SizedBox(height: 8),
-                  _CardValue(
-                    label: 'Current balance',
-                    value: _formatMoney(currentBalance, 'INR'),
-                  ),
-                  const SizedBox(height: 18),
-                  const Text(
-                    'Select amount',
-                    style: TextStyle(
-                      color: AppTheme.navy,
-                      fontSize: 17,
-                      fontWeight: FontWeight.w700,
-                    ),
-                  ),
-                  const SizedBox(height: 10),
-                  Wrap(
-                    spacing: 8,
-                    runSpacing: 8,
-                    children: [
-                      for (final amount in _presetAmounts)
-                        ChoiceChip(
-                          label: Text('₹${amount.toStringAsFixed(0)}'),
-                          selected: _selectedAmount == amount,
-                          onSelected: _processing
-                              ? null
-                              : (_) => setState(() => _selectedAmount = amount),
-                        ),
-                    ],
-                  ),
-                  const SizedBox(height: 14),
-                  TextFormField(
-                    initialValue: _selectedAmount.toStringAsFixed(2),
-                    keyboardType: const TextInputType.numberWithOptions(
-                      decimal: true,
-                    ),
-                    decoration: const InputDecoration(
-                      labelText: 'Custom amount',
-                      prefixText: '₹ ',
-                    ),
-                    onChanged: _processing
-                        ? null
-                        : (value) {
-                            final parsed = double.tryParse(value);
-                            if (parsed != null && parsed > 0) {
-                              setState(() => _selectedAmount = parsed);
-                            }
-                          },
-                  ),
-                  const SizedBox(height: 14),
-                  Container(
-                    padding: const EdgeInsets.all(14),
-                    decoration: BoxDecoration(
-                      color: const Color(0xFFF3F6F9),
-                      borderRadius: BorderRadius.circular(12),
-                    ),
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.stretch,
+                    Row(
                       children: [
-                        const Text(
-                          'Payment summary',
-                          style: TextStyle(
-                            color: AppTheme.navy,
-                            fontWeight: FontWeight.w700,
+                        const Expanded(
+                          child: Text(
+                            'Recharge EV Charging Card',
+                            style: TextStyle(
+                              color: AppTheme.navy,
+                              fontSize: 21,
+                              fontWeight: FontWeight.w800,
+                            ),
                           ),
                         ),
-                        const SizedBox(height: 8),
-                        Row(
-                          children: [
-                            const Expanded(
-                              child: Text('Charging Card Recharge'),
-                            ),
-                            Text(_formatMoney(_selectedAmount, 'INR')),
-                          ],
-                        ),
-                        const SizedBox(height: 6),
-                        Row(
-                          children: [
-                            const Expanded(
-                              child: Text('PayPal Sandbox Amount'),
-                            ),
-                            Text('${_formatMoney(paypalAmount, 'USD')} USD'),
-                          ],
-                        ),
-                        const SizedBox(height: 6),
-                        Row(
-                          children: [
-                            const Expanded(child: Text('Provider')),
-                            const Text('PayPal Sandbox'),
-                          ],
-                        ),
-                        const SizedBox(height: 6),
-                        Row(
-                          children: [
-                            const Expanded(child: Text('Conversion')),
-                            Text(
-                              'Demo fixed rate (DEMO ONLY): '
-                              '₹1 = \$${_demoExchangeRateInrToUsd.toStringAsFixed(3)}',
-                            ),
-                          ],
+                        IconButton(
+                          tooltip: 'Close',
+                          onPressed: _confirming
+                              ? null
+                              : () => Navigator.of(context).pop(),
+                          icon: const Icon(Icons.close_rounded),
                         ),
                       ],
                     ),
-                  ),
-                  const SizedBox(height: 14),
-                  if (_orderId != null &&
-                      !kIsWeb &&
-                      _approvalUrl != null &&
-                      _approvalUrl!.isNotEmpty) ...[
-                    Text(
-                      'External PayPal approval (Android/iOS): complete the '
-                      'checkout, return here, and confirm capture.',
-                      style: const TextStyle(color: AppTheme.mutedBlue),
+                    const SizedBox(height: 8),
+                    _CardValue(
+                      label: 'Current balance',
+                      value: _formatMoney(currentBalance, 'INR'),
+                    ),
+                    const SizedBox(height: 18),
+                    const Text(
+                      'Select amount',
+                      style: TextStyle(
+                        color: AppTheme.navy,
+                        fontSize: 17,
+                        fontWeight: FontWeight.w700,
+                      ),
                     ),
                     const SizedBox(height: 10),
-                  ],
-                  if (_error != null) ...[
-                    const SizedBox(height: 8),
-                    Text(
-                      _error!,
-                      style: const TextStyle(color: Colors.redAccent),
+                    Wrap(
+                      spacing: 8,
+                      runSpacing: 8,
+                      children: [
+                        for (final amount in _presetAmounts)
+                          ChoiceChip(
+                            label: Text('₹${amount.toStringAsFixed(0)}'),
+                            selected: _selectedAmount == amount,
+                            onSelected: _processing
+                                ? null
+                                : (_) =>
+                                      setState(() => _selectedAmount = amount),
+                          ),
+                      ],
                     ),
-                  ],
-                  if (_statusMessage != null) ...[
-                    const SizedBox(height: 8),
-                    Text(
-                      _statusMessage!,
-                      style: const TextStyle(color: AppTheme.mutedBlue),
-                    ),
-                  ],
-                  const SizedBox(height: 12),
-                  if (_orderId == null) ...[
-                    FilledButton.icon(
-                      onPressed: _processing ? null : _createOrder,
-                      icon: const Icon(Icons.lock_open_rounded),
-                      label: _processing
-                          ? const SizedBox(
-                              height: 18,
-                              width: 18,
-                              child: CircularProgressIndicator(strokeWidth: 2),
-                            )
-                          : const Text('Continue to PayPal'),
-                    ),
-                  ] else if (kIsWeb) ...[
-                    FilledButton.icon(
-                      onPressed: _processing
+                    const SizedBox(height: 14),
+                    TextFormField(
+                      initialValue: _selectedAmount.toStringAsFixed(2),
+                      keyboardType: const TextInputType.numberWithOptions(
+                        decimal: true,
+                      ),
+                      decoration: const InputDecoration(
+                        labelText: 'Custom amount',
+                        prefixText: '₹ ',
+                      ),
+                      onChanged: _processing
                           ? null
-                          : _webCheckoutReady
-                          ? _startWebCheckout
-                          : _prepareWebCheckout,
-                      icon: const Icon(Icons.payments_rounded),
-                      label: _processing
-                          ? const SizedBox(
-                              height: 18,
-                              width: 18,
-                              child: CircularProgressIndicator(strokeWidth: 2),
-                            )
-                          : Text(
-                              _webCheckoutReady
-                                  ? 'Pay with PayPal'
-                                  : 'Prepare PayPal checkout',
-                            ),
-                    ),
-                  ] else ...[
-                    FilledButton.icon(
-                      onPressed: _processing ? null : _captureApprovedOrder,
-                      icon: const Icon(Icons.check_circle_outline_rounded),
-                      label: _processing
-                          ? const SizedBox(
-                              height: 18,
-                              width: 18,
-                              child: CircularProgressIndicator(strokeWidth: 2),
-                            )
-                          : const Text('Confirm payment capture'),
-                    ),
-                    const SizedBox(height: 8),
-                    TextButton.icon(
-                      onPressed: _processing
-                          ? null
-                          : () async {
-                              final uri = Uri.tryParse(_approvalUrl ?? '');
-                              if (uri != null &&
-                                  uri.scheme == 'https' &&
-                                  (uri.host == 'sandbox.paypal.com' ||
-                                      uri.host.endsWith(
-                                        '.sandbox.paypal.com',
-                                      )) &&
-                                  mounted) {
-                                final opened = await launchUrl(
-                                  uri,
-                                  mode: LaunchMode.externalApplication,
-                                );
-                                if (!opened) {
-                                  _showError(
-                                    'Could not open PayPal Sandbox checkout.',
-                                  );
-                                }
+                          : (value) {
+                              final parsed = double.tryParse(value);
+                              if (parsed != null && parsed > 0) {
+                                setState(() => _selectedAmount = parsed);
                               }
                             },
-                      icon: const Icon(Icons.open_in_new_rounded),
-                      label: const Text('Open PayPal checkout'),
                     ),
+                    const SizedBox(height: 14),
+                    Container(
+                      padding: const EdgeInsets.all(14),
+                      decoration: BoxDecoration(
+                        color: const Color(0xFFF3F6F9),
+                        borderRadius: BorderRadius.circular(12),
+                      ),
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.stretch,
+                        children: [
+                          const Text(
+                            'Payment summary',
+                            style: TextStyle(
+                              color: AppTheme.navy,
+                              fontWeight: FontWeight.w700,
+                            ),
+                          ),
+                          const SizedBox(height: 8),
+                          Row(
+                            children: [
+                              const Expanded(
+                                child: Text('Charging Card Recharge'),
+                              ),
+                              Text(_formatMoney(_selectedAmount, 'INR')),
+                            ],
+                          ),
+                          const SizedBox(height: 6),
+                          Row(
+                            children: [
+                              const Expanded(
+                                child: Text('PayPal Sandbox Amount'),
+                              ),
+                              Text('${_formatMoney(paypalAmount, 'USD')} USD'),
+                            ],
+                          ),
+                          const SizedBox(height: 6),
+                          Row(
+                            children: [
+                              const Expanded(child: Text('Provider')),
+                              const Text('PayPal Sandbox'),
+                            ],
+                          ),
+                          const SizedBox(height: 6),
+                          Row(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              const Text('Conversion'),
+                              const SizedBox(width: 12),
+                              Expanded(
+                                child: Text(
+                                  'Demo fixed rate (DEMO ONLY): '
+                                  '₹1 = \$${_demoExchangeRateInrToUsd.toStringAsFixed(3)}',
+                                  textAlign: TextAlign.end,
+                                ),
+                              ),
+                            ],
+                          ),
+                        ],
+                      ),
+                    ),
+                    const SizedBox(height: 14),
+                    if (_error != null) ...[
+                      const SizedBox(height: 8),
+                      Text(
+                        _error!,
+                        style: const TextStyle(color: Colors.redAccent),
+                      ),
+                    ],
+                    if (_statusMessage != null) ...[
+                      const SizedBox(height: 8),
+                      Text(
+                        _statusMessage!,
+                        style: const TextStyle(color: AppTheme.mutedBlue),
+                      ),
+                    ],
+                    const SizedBox(height: 12),
+                    if (_orderId == null) ...[
+                      FilledButton.icon(
+                        onPressed: _processing ? null : _createOrder,
+                        icon: const Icon(Icons.lock_open_rounded),
+                        label: _processing
+                            ? const SizedBox(
+                                height: 18,
+                                width: 18,
+                                child: CircularProgressIndicator(
+                                  strokeWidth: 2,
+                                ),
+                              )
+                            : const Text('Continue to PayPal'),
+                      ),
+                    ] else if (kIsWeb) ...[
+                      FilledButton.icon(
+                        onPressed: _processing
+                            ? null
+                            : _webCheckoutReady
+                            ? _startWebCheckout
+                            : _prepareWebCheckout,
+                        icon: const Icon(Icons.payments_rounded),
+                        label: _processing
+                            ? const SizedBox(
+                                height: 18,
+                                width: 18,
+                                child: CircularProgressIndicator(
+                                  strokeWidth: 2,
+                                ),
+                              )
+                            : Text(
+                                _webCheckoutReady
+                                    ? 'Pay with PayPal'
+                                    : 'Prepare PayPal checkout',
+                              ),
+                      ),
+                    ] else if (_confirming) ...[
+                      FilledButton.icon(
+                        onPressed: null,
+                        icon: const SizedBox(
+                          height: 18,
+                          width: 18,
+                          child: CircularProgressIndicator(strokeWidth: 2),
+                        ),
+                        label: const Text('Confirming payment…'),
+                      ),
+                    ] else ...[
+                      // Android/iOS: always a way forward, back or out.
+                      FilledButton.icon(
+                        onPressed: _captureApprovedOrder,
+                        icon: const Icon(Icons.check_circle_outline_rounded),
+                        label: const Text('Confirm payment'),
+                      ),
+                      const SizedBox(height: 8),
+                      OutlinedButton.icon(
+                        onPressed: _openPayPal,
+                        icon: const Icon(Icons.open_in_new_rounded),
+                        label: const Text('Open PayPal again'),
+                      ),
+                      TextButton(
+                        onPressed: () => Navigator.of(context).pop(),
+                        child: const Text('Cancel'),
+                      ),
+                    ],
                   ],
-                ],
-              );
-            },
+                );
+              },
+            ),
           ),
         ),
       ),
