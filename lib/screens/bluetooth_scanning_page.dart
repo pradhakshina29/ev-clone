@@ -247,6 +247,21 @@ class _BluetoothScanningPageState extends State<BluetoothScanningPage> {
                                 : 'Connect Vehicle',
                           ),
                         ),
+                      if (matchesVehicle && _ble.recoveryAction != null) ...[
+                        const SizedBox(height: 8),
+                        OutlinedButton.icon(
+                          onPressed: () =>
+                              unawaited(_ble.performRecoveryAction()),
+                          icon: const Icon(Icons.settings),
+                          label: Text(
+                            _ble.recoveryAction ==
+                                    VehicleBleRecoveryAction
+                                        .openLocationSettings
+                                ? 'Turn on Location'
+                                : 'Open settings',
+                          ),
+                        ),
+                      ],
                     ],
                   ),
                 ),

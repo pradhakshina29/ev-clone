@@ -370,6 +370,8 @@ class _VehicleControlsPageState extends State<VehicleControlsPage> {
             return _BleStatusCard(
               phase: matchesVehicle ? _ble.phase : VehicleBlePhase.stopped,
               error: matchesVehicle ? _ble.error : null,
+              recoveryAction: matchesVehicle ? _ble.recoveryAction : null,
+              onRecover: () => unawaited(_ble.performRecoveryAction()),
               onRetry: () => _ble.start(
                 widget.vehicle.id,
                 deviceName: widget.vehicle.bluetoothDeviceName,
@@ -555,6 +557,8 @@ class _BleStatusCard extends StatelessWidget {
   const _BleStatusCard({
     required this.phase,
     required this.error,
+    required this.recoveryAction,
+    required this.onRecover,
     required this.onRetry,
     required this.onConnect,
     required this.onDisconnect,
@@ -570,6 +574,8 @@ class _BleStatusCard extends StatelessWidget {
 
   final VehicleBlePhase phase;
   final String? error;
+  final VehicleBleRecoveryAction? recoveryAction;
+  final VoidCallback onRecover;
   final VoidCallback onRetry;
   final VoidCallback onConnect;
   final VoidCallback onDisconnect;
@@ -655,6 +661,17 @@ class _BleStatusCard extends StatelessWidget {
                       fontWeight: FontWeight.w600,
                     ),
                   ),
+                  if (recoveryAction != null)
+                    TextButton.icon(
+                      onPressed: onRecover,
+                      icon: const Icon(Icons.settings, size: 18),
+                      label: Text(
+                        recoveryAction ==
+                                VehicleBleRecoveryAction.openLocationSettings
+                            ? 'Turn on Location'
+                            : 'Open settings',
+                      ),
+                    ),
                   if (deviceName != null) ...[
                     const SizedBox(height: 3),
                     Text(

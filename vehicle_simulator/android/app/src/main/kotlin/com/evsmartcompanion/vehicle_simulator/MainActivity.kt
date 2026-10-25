@@ -17,8 +17,11 @@ class MainActivity : FlutterActivity() {
         private const val TAG = "VehicleSimulatorBLE"
     }
 
+    private var blePermissions: BlePermissionsHandler? = null
+
     override fun configureFlutterEngine(flutterEngine: FlutterEngine) {
         super.configureFlutterEngine(flutterEngine)
+        blePermissions = BlePermissionsHandler(this, flutterEngine.dartExecutor.binaryMessenger)
         MethodChannel(flutterEngine.dartExecutor.binaryMessenger, CHANNEL)
             .setMethodCallHandler { call, result ->
                 if (call.method != "inspect") {
@@ -27,6 +30,17 @@ class MainActivity : FlutterActivity() {
                 }
                 result.success(inspectBluetooth())
             }
+    }
+
+    override fun onRequestPermissionsResult(
+        requestCode: Int,
+        permissions: Array<out String>,
+        grantResults: IntArray
+    ) {
+        if (blePermissions?.onRequestPermissionsResult(requestCode, permissions, grantResults) == true) {
+            return
+        }
+        super.onRequestPermissionsResult(requestCode, permissions, grantResults)
     }
 
     private fun inspectBluetooth(): Map<String, Any?> {

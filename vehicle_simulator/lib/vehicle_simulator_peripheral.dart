@@ -5,6 +5,7 @@ import 'dart:collection';
 import 'package:bluetooth_low_energy/bluetooth_low_energy.dart';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/services.dart';
+import 'package:vehicle_ble_protocol/ble_permissions.dart';
 import 'package:vehicle_ble_protocol/vehicle_ble_protocol.dart';
 
 import 'vehicle_health_simulation.dart';
@@ -76,6 +77,10 @@ class VehicleSimulatorPeripheral extends ChangeNotifier {
   int _messageId = 0;
   bool _advertising = false;
   bool _disposed = false;
+  bool _permissionSettingsRequired = false;
+  final BlePermissionGate _permissionGate = BlePermissionGate(
+    role: BleRole.peripheral,
+  );
   bool _notificationPending = false;
   bool _notificationInFlight = false;
   Timer? _stateNotificationTimer;
@@ -92,6 +97,51 @@ class VehicleSimulatorPeripheral extends ChangeNotifier {
   List<String> get eventLog => List.unmodifiable(_eventLog);
   bool get isAuthorizedPlatform =>
       defaultTargetPlatform == TargetPlatform.android;
+
+  /// True when Android will no longer show the permission dialog and the
+  /// user has to allow Nearby devices in the app's settings.
+  bool get permissionSettingsRequired => _permissionSettingsRequired;
+
+  Future<void> openAppSettings() => _permissionGate.platform.openAppSettings();
+
+  /// Requests BLUETOOTH_ADVERTISE + BLUETOOTH_CONNECT on Android 12+
+  /// (location on Android 11 and lower). Called at app start and again
+  /// before every advertising attempt.
+  Future<bool> ensurePermissions() async {
+    if (!isAuthorizedPlatform) return false;
+    final BlePermissionResult result;
+    try {
+      result = await _permissionGate.ensure();
+    } catch (error) {
+      debugPrint('[Vehicle Simulator BLE] Permission check failed: $error');
+      _setStatus('Could not check Bluetooth permissions: $error', error: true);
+      return false;
+    }
+    _permissionSettingsRequired =
+        result == BlePermissionResult.permanentlyDenied;
+    switch (result) {
+      case BlePermissionResult.granted:
+      case BlePermissionResult.locationServicesOff:
+        if (_error != null && !_advertising) {
+          _setStatus('Ready to advertise');
+        } else {
+          notifyListeners();
+        }
+        return true;
+      case BlePermissionResult.denied:
+        _setStatus(
+          'Nearby devices permission is required to advertise. Tap Start advertising and choose Allow.',
+          error: true,
+        );
+        return false;
+      case BlePermissionResult.permanentlyDenied:
+        _setStatus(
+          'Nearby devices permission was denied. Open settings › Permissions › Nearby devices › Allow, then start advertising.',
+          error: true,
+        );
+        return false;
+    }
+  }
 
   Future<BluetoothLowEnergyState> _waitForBluetoothState() async {
     final state = _manager.state;
@@ -127,15 +177,9 @@ class VehicleSimulatorPeripheral extends ChangeNotifier {
     }
     try {
       await _logBluetoothDiagnostics('before permission request');
-      final authorized = await _manager.authorize();
+      final authorized = await ensurePermissions();
       await _logBluetoothDiagnostics('after permission request');
-      if (!authorized) {
-        _setStatus(
-          'Bluetooth permission is required to advertise.',
-          error: true,
-        );
-        return;
-      }
+      if (!authorized) return;
       if (_manager.state != BluetoothLowEnergyState.poweredOn) {
         final state = await _waitForBluetoothState();
         if (state != BluetoothLowEnergyState.poweredOn) {

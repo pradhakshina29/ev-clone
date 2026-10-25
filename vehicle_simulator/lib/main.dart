@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:vehicle_ble_protocol/vehicle_ble_protocol.dart';
 
@@ -31,6 +33,13 @@ class VehicleSimulatorPage extends StatefulWidget {
 class _VehicleSimulatorPageState extends State<VehicleSimulatorPage> {
   final VehicleSimulatorPeripheral _peripheral = VehicleSimulatorPeripheral();
   final TextEditingController _vehicleIdController = TextEditingController();
+
+  @override
+  void initState() {
+    super.initState();
+    // Ask for Nearby devices up front so advertising can start immediately.
+    unawaited(_peripheral.ensurePermissions());
+  }
 
   @override
   void dispose() {
@@ -305,6 +314,13 @@ class _VehicleSimulatorPageState extends State<VehicleSimulatorPage> {
                           ),
                         ),
                       ],
+                      if (_peripheral.permissionSettingsRequired)
+                        TextButton.icon(
+                          onPressed: () =>
+                              unawaited(_peripheral.openAppSettings()),
+                          icon: const Icon(Icons.settings),
+                          label: const Text('Open settings'),
+                        ),
                     ],
                   ),
                 ),

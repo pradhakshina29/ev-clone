@@ -3,6 +3,7 @@ import 'dart:convert';
 
 import 'package:bluetooth_low_energy/bluetooth_low_energy.dart';
 import 'package:flutter/foundation.dart';
+import 'package:vehicle_ble_protocol/ble_permissions.dart';
 import 'package:vehicle_ble_protocol/vehicle_ble_protocol.dart';
 
 import 'vehicle_ble_web_adapter_interface.dart';
@@ -29,17 +30,31 @@ enum VehicleBlePhase {
   stopped,
 }
 
+/// A step the user can take to clear the current Android error.
+enum VehicleBleRecoveryAction { openAppSettings, openLocationSettings }
+
+/// Whether an advertised [name] is the simulator named [expected]. Android
+/// may report names with stray whitespace or different casing.
+bool matchesVehicleSimulatorName(String? name, String expected) =>
+    name != null && name.trim().toLowerCase() == expected.trim().toLowerCase();
+
 class VehicleBleClient extends ChangeNotifier {
-  VehicleBleClient({this.webAdapter, this.authenticationCheck});
+  VehicleBleClient({
+    this.webAdapter,
+    this.authenticationCheck,
+    this._permissionGate,
+  });
 
   static final VehicleBleClient shared = VehicleBleClient._applicationScoped();
 
   VehicleBleClient._applicationScoped()
     : webAdapter = null,
+      _permissionGate = null,
       authenticationCheck = (() => AuthService().currentUser != null);
 
   final VehicleBleWebAdapter? webAdapter;
   final bool Function()? authenticationCheck;
+  BlePermissionGate? _permissionGate;
   CentralManager? _manager;
   Peripheral? _peripheral;
   GATTCharacteristic? _stateCharacteristic;
@@ -58,6 +73,9 @@ class VehicleBleClient extends ChangeNotifier {
   // The advertised name to accept on Android, e.g. EV-Simulator-02 for EV002.
   String _expectedDeviceName = defaultVehicleSimulatorName;
   String? _error;
+  VehicleBleRecoveryAction? _recoveryAction;
+  // Simulator names seen while scanning that did not match, for diagnostics.
+  final Set<String> _otherSimulatorNames = {};
   VehicleBlePhase _phase = VehicleBlePhase.stopped;
   int _lastSequence = -1;
   DateTime? _lastDataUpdate;
@@ -95,6 +113,7 @@ class VehicleBleClient extends ChangeNotifier {
 
   VehicleBlePhase get phase => _phase;
   String? get error => _error;
+  VehicleBleRecoveryAction? get recoveryAction => _recoveryAction;
   DateTime? get lastDataUpdate => _lastDataUpdate;
   String? get vehicleId => _vehicleId.isEmpty ? null : _vehicleId;
   String get expectedDeviceName => _expectedDeviceName;
@@ -292,6 +311,53 @@ class VehicleBleClient extends ChangeNotifier {
       await _startWebAttempt();
       return;
     }
+    // Permissions come from BlePermissionGate rather than the plugin's
+    // authorize(), whose future never completes when Android interrupts the
+    // request (for example while the map's location dialog is open).
+    _setPhase(VehicleBlePhase.authorizing, null);
+    final BlePermissionResult permission;
+    try {
+      permission = await (_permissionGate ??= BlePermissionGate(
+        role: BleRole.central,
+      )).ensure();
+    } catch (error) {
+      debugPrint('[Vehicle BLE] Permission check failed: $error');
+      _setPhase(
+        VehicleBlePhase.error,
+        'Could not check Bluetooth permissions. Retry, or allow Nearby devices / Location for this app in Settings.',
+      );
+      return;
+    }
+    if (_disposed) return;
+    if (!_isAuthenticated) {
+      _setPhase(VehicleBlePhase.stopped, null);
+      return;
+    }
+    switch (permission) {
+      case BlePermissionResult.granted:
+        break;
+      case BlePermissionResult.denied:
+        _setPhase(
+          VehicleBlePhase.error,
+          'Bluetooth permissions are required to find the vehicle simulator. Tap Retry and choose Allow.',
+        );
+        return;
+      case BlePermissionResult.permanentlyDenied:
+        _setPhase(
+          VehicleBlePhase.error,
+          'Bluetooth permissions were denied. Open Settings › Permissions and allow Nearby devices (Android 12+) or Location (Android 11 and lower), then retry.',
+          recoveryAction: VehicleBleRecoveryAction.openAppSettings,
+        );
+        return;
+      case BlePermissionResult.locationServicesOff:
+        _setPhase(
+          VehicleBlePhase.error,
+          'Turn on Location. Android 11 and lower only report nearby Bluetooth devices while Location is on.',
+          recoveryAction: VehicleBleRecoveryAction.openLocationSettings,
+        );
+        return;
+    }
+
     _manager ??= CentralManager();
     _discoveredSubscription ??= _manager!.discovered.listen(
       _onDiscovered,
@@ -305,31 +371,59 @@ class VehicleBleClient extends ChangeNotifier {
       _onNotification,
       onError: _onBleError,
     );
-
-    _setPhase(VehicleBlePhase.authorizing, null);
     try {
-      final authorized = await _manager!.authorize();
-      if (!authorized) {
-        _setPhase(
-          VehicleBlePhase.error,
-          'Bluetooth permission is required to connect to the vehicle simulator.',
-        );
-        return;
-      }
-      if (!_isAuthenticated) {
-        _setPhase(VehicleBlePhase.stopped, null);
-        return;
-      }
-      if (_manager!.state != BluetoothLowEnergyState.poweredOn) {
+      final state = await _bluetoothState(_manager!);
+      if (_disposed) return;
+      if (state == BluetoothLowEnergyState.poweredOff) {
         _setPhase(
           VehicleBlePhase.error,
           'Turn on Bluetooth to connect to the vehicle simulator.',
         );
         return;
       }
+      if (state == BluetoothLowEnergyState.unsupported) {
+        _setPhase(
+          VehicleBlePhase.unsupported,
+          'This device does not support Bluetooth Low Energy.',
+        );
+        return;
+      }
+      // The plugin refreshes its cached state only when the app resumes, so
+      // it can still read unauthorized right after a grant; the gate above
+      // is authoritative.
       await _discover();
     } catch (error) {
       _onBleError(error, StackTrace.current);
+    }
+  }
+
+  Future<BluetoothLowEnergyState> _bluetoothState(
+    CentralManager manager,
+  ) async {
+    bool settled(BluetoothLowEnergyState state) =>
+        state != BluetoothLowEnergyState.unknown &&
+        state != BluetoothLowEnergyState.unauthorized;
+    if (settled(manager.state)) return manager.state;
+    try {
+      final event = await manager.stateChanged
+          .firstWhere((event) => settled(event.state))
+          .timeout(const Duration(seconds: 3));
+      return event.state;
+    } on TimeoutException {
+      return manager.state;
+    }
+  }
+
+  /// Opens the system screen that resolves [recoveryAction].
+  Future<void> performRecoveryAction() async {
+    final gate = _permissionGate ??= BlePermissionGate(role: BleRole.central);
+    switch (_recoveryAction) {
+      case VehicleBleRecoveryAction.openAppSettings:
+        await gate.platform.openAppSettings();
+      case VehicleBleRecoveryAction.openLocationSettings:
+        await gate.platform.openLocationSettings();
+      case null:
+        return;
     }
   }
 
@@ -514,6 +608,8 @@ class VehicleBleClient extends ChangeNotifier {
       return;
     }
     _setPhase(VehicleBlePhase.scanning, null);
+    _otherSimulatorNames.clear();
+    _logBleEvent('SCAN_STARTED', 'expectedName=$_expectedDeviceName');
     try {
       _discoveryRunning = true;
       await _manager!.startDiscovery(
@@ -523,9 +619,12 @@ class VehicleBleClient extends ChangeNotifier {
       _scanTimeoutTimer = Timer(_scanTimeout, () {
         if (_disposed || !_discoveryRunning || _connecting) return;
         unawaited(_stopDiscovery());
+        final others = _otherSimulatorNames.join(', ');
         _setPhase(
           VehicleBlePhase.reconnecting,
-          'No $_expectedDeviceName found. Retrying with a limited backoff.',
+          others.isEmpty
+              ? 'No $_expectedDeviceName found. Retrying with a limited backoff.'
+              : 'Found $others, but this vehicle expects $_expectedDeviceName. Enter vehicle ID $_vehicleId in the simulator and restart advertising.',
         );
         _scheduleReconnect();
       });
@@ -543,11 +642,17 @@ class VehicleBleClient extends ChangeNotifier {
           uuid.toString().toLowerCase() ==
           vehicleControlServiceUuid.toLowerCase(),
     );
-    if (!serviceFound ||
-        event.advertisement.name != _expectedDeviceName) {
+    final name = event.advertisement.name?.trim();
+    if (!serviceFound) return;
+    if (!matchesVehicleSimulatorName(name, _expectedDeviceName)) {
+      // Results that arrive before the scan response carry no name yet.
+      if (name != null && name.isNotEmpty && _otherSimulatorNames.add(name)) {
+        _logBleEvent('OTHER_SIMULATOR_IGNORED', 'name=$name');
+      }
       return;
     }
-    _selectedDeviceName = event.advertisement.name;
+    _logBleEvent('SIMULATOR_FOUND', 'name=$name');
+    _selectedDeviceName = name;
     _scanTimeoutTimer?.cancel();
     unawaited(_stopDiscovery());
     unawaited(_connect(event.peripheral));
@@ -919,10 +1024,15 @@ class VehicleBleClient extends ChangeNotifier {
     }
   }
 
-  void _setPhase(VehicleBlePhase phase, String? error) {
+  void _setPhase(
+    VehicleBlePhase phase,
+    String? error, {
+    VehicleBleRecoveryAction? recoveryAction,
+  }) {
     if (_disposed) return;
     _phase = phase;
     _error = error;
+    _recoveryAction = recoveryAction;
     notifyListeners();
   }
 
